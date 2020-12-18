@@ -9,14 +9,14 @@ using CommonUtils, Basis1D
 N   = 3 # The order of approximation
 K1D = 16
 CFL = 2
-T   = 1 # endtime
+T   = 10 # endtime
 
 "Mesh related variables"
 VX = LinRange(-1,1,K1D+1)
 EToV = transpose(reshape(sort([1:K1D; 2:K1D+1]),2,K1D))
 
 "Construct matrices on reference elements"
-r,w = Basis1D.gauss_lobatto_quad(0,0,N)
+r,w = gauss_lobatto_quad(0,0,N)
 V = vandermonde_1D(N, r)
 Dr = grad_vandermonde_1D(N, r)/V
 M = inv(V*V')
