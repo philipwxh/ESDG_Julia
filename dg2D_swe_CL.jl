@@ -22,7 +22,7 @@ N   = 3 # The order of approximation
 K1D = 8
 CFL = 1/4
 T   = 1 # endtimeA
-MAXIT = 1000000
+MAXIT = 100
 
 function build_meshfree_sbp(rq,sq,wq,rf,sf,wf,nrJ,nsJ,α)
     # [-1,1,0], [-1,-1,sqrt(4/3)]
@@ -335,7 +335,7 @@ u = (h, hu, hv)
 ops = (Qrskew_ID,Qsskew_ID, Qrskew_ES,Qsskew_ES,E, M_inv, Pf)
 dis_cst = (Cf, C, C_x, C_y)
 vgeo = (rxJ,sxJ,ryJ,syJ,J)
-fgeo = (nxJ,nyJ,sJ)
+fgeo = (nxJ,nyJ,sJ, nx, ny)
 nodemaps = (mapP,mapB)
 
 
@@ -345,7 +345,7 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
     Qr_ID,Qs_ID,Qr_ES,Qs_ES,E,M_inv,EfTW= ops
     Cf, C, C_x, C_y = dis_cst
     rxJ,sxJ,ryJ,syJ,J = vgeo
-    nxJ,nyJ,sJ = fgeo
+    nxJ,nyJ,sJ,nx,ny = fgeo
     (mapP,mapB) = nodemaps
     u = hu./h; v = hv./h
     uf = E*u; vf = E*v
@@ -353,7 +353,7 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
     hP  = hf[mapP]; huP = huf[mapP] ;hvP = hvf[mapP]
     dh  = hP-hf; dhu = huP-huf; dhv = hvP-hvf
     UL = (hf, huf, hvf); UR = (hP, huP, hvP)
-    lambdaf = abs.(uf.*nx+vf.*ny)+sqrt.(g.*hf)
+    lambdaf = abs.(uf.*nx+vf.*ny) + sqrt.(g*hf)
     lambdaP = lambdaf[mapP]
     c = max.(abs.(lambdaf), abs.(lambdaP))
 
