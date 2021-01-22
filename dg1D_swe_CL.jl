@@ -21,7 +21,7 @@ using StartUpDG.ExplicitTimestepUtils
 global g = 1
 "Approximation parameters"
 N   = 3 # The order of approximation
-K1D = 8
+K1D = 16
 CFL = 1/2
 T   = 0.1 # endtime
 MAXIT = 1000000
@@ -62,16 +62,16 @@ function convex_limiter(rhsh_ES, rhshu_ES, rhsh_ID, rhshu_ID, hh, htmp, tol, dt)
             L[e] = min(L[e], l_k);
             if hh[k,e] <= tol || htmp[k,e] <= tol || norm(rhsh_Diff)<=tol
                 L[e] = 0
-                    if e == 1
-                        L[e+1] = 0
-                        L[end] = 0
-                    elseif  e == K1D
-                        L[e-1] = 0
-                        L[1] = 0
-                    else
-                      L[e+1] = 0
-                      L[e-1] = 0
-                    end
+                # if e == 1
+                #     L[e+1] = 0
+                #     L[end] = 0
+                # elseif  e == K1D
+                #     L[e-1] = 0
+                #     L[1] = 0
+                # else
+                #     L[e+1] = 0
+                #     L[e-1] = 0
+                # end
             end
         end
         rhsh[:,e]  = rhsh_ID[:,e]  + rhsh_Diff[:,e] *L[e]
@@ -295,7 +295,7 @@ tol = 1e-8
 DT = zeros(MAXIT)
 t = 0
 t_plot = dT*10
-global i
+global i;
 @gif for i = 1:MAXIT
     @show i, t
     global h, hu, u, t, t_plot

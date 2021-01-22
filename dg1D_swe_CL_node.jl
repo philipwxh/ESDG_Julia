@@ -21,9 +21,10 @@ using StartUpDG.ExplicitTimestepUtils
 global g = 1
 "Approximation parameters"
 N   = 3 # The order of approximation
-K1D = 4
-CFL = 0.5
+K1D = 32
+CFL = 1/2
 T   = 1 # endtime
+MAXIT = 1000000
 
 avg(a,b) = .5*(a+b)
 function fS1D(UL,UR)
@@ -34,6 +35,51 @@ function fS1D(UL,UR)
     fxS1 = @. avg(huL,huR)
     fxS2 = @. avg(huL,huR)*avg(uL,uR) + .5*hL*hR
     return fxS1,fxS2
+end
+
+function fS1D_LF(UL,UR)
+    hL,huL = UL
+    hR,huR = UR
+    uL = huL./hL
+    uR = huR./hR
+    fxS1 = @. avg(huL,huR)
+    fxS2 = @. avg(huL*uL,huR*uR) + .5*avg(hL*hL,hR*hR)
+    return fxS1,fxS2
+end
+
+function convex_limiter(rhsh_ES, rhshu_ES, rhsh_ID, rhshu_ID, hh, htmp, tol, dt)
+    rhsh_Diff = rhsh_ES - rhsh_ID; rhshu_Diff = rhshu_ES - rhshu_ID;
+    rhsh = zeros(size(h)); rhshu = zeros(size(h));
+    L = ones(1,size(h,2));
+    for e = 1:size(h,2)
+        for k = 1:size(h,1)
+            l_k = 1
+            if rhsh_Diff[k,e] < 0
+                l_k = -(hh[k,e] + dt*rhsh_ID[k,e]-tol) / (dt*(rhsh_Diff[k,e]))
+                l_k = min(l_k, 1)
+            end
+            l_k = max(l_k,0)
+            l_k = min(1, l_k)
+            if hh[k,e] <= tol || htmp[k,e] <= tol || norm(rhsh_Diff)<=tol
+                L[e] = 0
+                if e == 1
+                    L[e+1] = 0
+                    L[end] = 0
+                elseif  e == K1D
+                    L[e-1] = 0
+                    L[1] = 0
+                else
+                    L[e+1] = 0
+                    L[e-1] = 0
+                end
+            end
+            l_k = min(L[e], l_k);
+            rhsh[k,e]  = rhsh_ID[k,e]  + rhsh_Diff[k,e] *l_k
+            rhshu[k,e] = rhshu_ID[k,e] + rhshu_Diff[k,e]*l_k
+        end
+
+    end
+    return rhsh, rhshu, L
 end
 
 function make_meshfree_ops(r,w)
@@ -144,6 +190,7 @@ M_inv = diagm(1 ./(w.*J[1]))
 
 "initial conditions"
 h = @. exp(-25*x^2)+2
+
 # h = h*0 .+2
 h[:,1:convert(Int,K1D/2)] .= 1e-10
 h[:,convert(Int,K1D/2)+1:K1D] .= 1.0
@@ -154,7 +201,7 @@ rk4a,rk4b,rk4c = ck45()
 CN = (N+1)*(N+2)/2  # estimated trace constant
 dt = CFL * 2 / (CN*K1D)
 Nsteps = convert(Int,ceil(T/dt))
-dt = T/Nsteps
+dT = T/Nsteps
 
 "pack arguments into tuples - will "
 u    = (h, hu)
@@ -163,8 +210,8 @@ vgeo = (rxJ,J)
 fgeo = (nxJ)
 nodemaps = (mapM, mapP)
 
-function rhs(U,ops,vgeo,fgeo,mapP,dt)
-        h, hu = U
+function rhs(h,hu,ops,vgeo,fgeo,mapP,dt)
+        # h, hu = U
         Q_ID,Q_ES,E,M_inv,Vf = ops
         rxJ,J = vgeo
         nxJ = fgeo
@@ -178,18 +225,24 @@ function rhs(U,ops,vgeo,fgeo,mapP,dt)
         huP = huM[mapP]
         dhu = huP - huM
 
+        uM = Vf*u
+        uP = u[mapP]
+
         UL = (hM, huM)
         UR = (hP, huP)
         fxS1,fxS2 = fS1D(UL,UR)
         # lambda = abs.(u.*nxJ)+sqrt.(g.*h)
         lambda = abs.(u)+sqrt.(g.*h)
+        lambdaM = Vf*lambda
+        lambdaP = lambdaM[mapP]
+        lambdaF = max.(lambdaM, lambdaP)
+        tau = 1
 
         #ES part
         Fs1 = fxS1.*nxJ
         Fs2 = fxS2.*nxJ
-        tau = 1
-        f1 = transpose(E)*(Fs1 - .5*tau*abs.(nxJ).*dh)
-        f2 = transpose(E)*(Fs2 - .5*tau*abs.(nxJ).*dhu)
+        f1 = transpose(E)*(Fs1 - .5*tau*abs.(lambdaF).*dh)
+        f2 = transpose(E)*(Fs2 - .5*tau*abs.(lambdaF).*dhu)
         rhsh_ES = zeros(size(h))
         rhshu_ES = zeros(size(h))
         for e = 1:size(h,2)
@@ -209,15 +262,16 @@ function rhs(U,ops,vgeo,fgeo,mapP,dt)
         rhshu_ES += f2
 
         # ID part
-        lambdaM = Vf*lambda
-        lambdaP = lambdaM[mapP]
         c = [transpose(max.(lambda[1,:],lambda[2,:] )); transpose(max.(lambda[end,:],lambda[end-1,:] ))]
         # @show lambda c
         cij = 1/2
+        fxS1,fxS2 = fS1D_LF(UR,UR)
+        # rhsh_ID = rxJ.*(Q_ID*hu) + transpose(E)*(nxJ.*fxS1-.5*tau*abs.(lambdaF).*dh)
         rhsh_ID = rxJ.*(Q_ID*hu) + transpose(E)*(0.5*nxJ.*fxS1)
         rhsh_ID -= transpose(E)*(cij*max.(lambdaP,lambdaM) .* ( hP - hM )  )
         rhsh_ID -= transpose(E)*(cij*c.* ([transpose(h[2,:]);transpose(h[end-1,:])] - hM) )
 
+        # rhshu_ID = rxJ.*(Q_ID*(hu.*u+1/2*g*h.*h)) + transpose(E)*(nxJ.*fxS2-.5*tau*abs.(lambdaF).*dhu)
         rhshu_ID = rxJ.*(Q_ID*(hu.*u+1/2*g*h.*h)) + transpose(E)*(0.5*nxJ.*fxS2)
         rhshu_ID -= transpose(E)*(cij*max.(lambdaP,lambdaM).* ( huP - huM ) )
         rhshu_ID -= transpose(E)*(cij*c.* ([transpose(hu[2,:]);transpose(hu[end-1,:])] - huM) )
@@ -230,6 +284,7 @@ function rhs(U,ops,vgeo,fgeo,mapP,dt)
             rhshu_ID[i,:] -= cij * ( ci_1.*(hu[i-1,:]-hu[i,:]) + ci_2.*(hu[i+1,:]-hu[i,:]) )
         end
         # end
+
         return -M_inv*rhsh_ES, -M_inv*rhshu_ES, -M_inv*rhsh_ID, -M_inv*rhshu_ID
 end
 
@@ -239,9 +294,13 @@ gr(size=(300,300),legend=false,markerstrokewidth=1,markersize=2)
 plt = plot(Vp*x,Vp*h)
 resu = zeros(size(x))
 tol = 1e-8
-@gif for i = 1:3
-    @show "iteration" i
-    global h, hu, u
+DT = zeros(MAXIT)
+t = 0
+t_plot = dT*10
+global i;
+@gif for i = 1:MAXIT
+    @show i, t
+    global h, hu, u, t, t_plot
     # for INTRK = 1:5
     #     rhsh = rhs(u,ops,vgeo,fgeo,mapP)
     #     # rhsh = rhs(u,M_inv,Qx)
@@ -249,84 +308,74 @@ tol = 1e-8
     #     @. u   += rk4b[INTRK]*resu
     # end
     # Heun's method - this is an example of a 2nd order SSP RK method
-    rhsh_ES1, rhshu_ES1, rhsh_ID1, rhshu_ID1 = rhs(u,ops,vgeo,fgeo,mapP,dt)
-    rhsh_Diff1 = rhsh_ES1 - rhsh_ID1; rhshu_Diff1 = rhshu_ES1 - rhshu_ID1;
-    rhsh1  = zeros(size(h))
-    rhshu1 = zeros(size(h))
-    L = zeros(size(h))
-    for e = 1:size(h,2)
-        for k = 1:size(h,1)
-            l_k = 1
-            if rhsh_Diff1[k,e] < 0
-                l_k = -(h[k,e] + dt*rhsh_ID1[k,e]-tol) / (dt*(rhsh_Diff1[k,e]))
-                l_k = min(l_k, 1)
-            end
-            l_k = max(l_k,0)
-            if h[k,e]<=tol
-                l_k = 0
-            end
-            # if l_k == 0
-            #         error("!!!!!")
-            # end
-            # l_k = 0
-            L[k,e] = l_k
-            rhsh1[k,e]  = rhsh_ID1[k,e]  + rhsh_Diff1[k,e] *l_k
-            rhshu1[k,e] = rhshu_ID1[k,e] + rhshu_Diff1[k,e]*l_k
-        end
-    end
-    @show L, h
-    htmp  = h  + dt*rhsh1
-    hutmp = hu + dt*rhshu1
-    utmp = (htmp, hutmp)
+    rhsh_ES1, rhshu_ES1, rhsh_ID1, rhshu_ID1 = rhs(h, hu,ops,vgeo,fgeo,mapP,0)
+    lambda = maximum(abs.(hu./h)+sqrt.(g.*h))
+    dt1 = min(T-t, minimum(w)*J[1]/(2*lambda), dT);
+    rhsh1, rhshu1, L1 = convex_limiter(rhsh_ES1, rhshu_ES1, rhsh_ID1, rhshu_ID1, h, h, tol, dt1)
+    # if dt<dT
+    #     rhsh1 = rhsh_ID1;
+    #     rhshu1 = rhshu_ID1;
+    # end
+    htmp  = h  + dt1*rhsh1
+    hutmp = hu + dt1*rhshu1
+    # utmp = (htmp, hutmp)
+    hutmp[findall(x->x<2*tol, htmp)] .= 0
+    # @show L1, htmp dt1
 
     h_min, pos = findmin(htmp)
-    if h_min < 0
+    if h_min <= 0
+       @show L1
        error("htmp_min<0 ", h_min, pos, "iteration ", i )
     end
-
-    rhsh_ES2, rhshu_ES2, rhsh_ID2, rhshu_ID2 = rhs(utmp,ops,vgeo,fgeo,mapP,dt)
-    rhsh_Diff2 = rhsh_ES2 - rhsh_ID2; rhshu_Diff2 = rhshu_ES2 - rhshu_ID2;
-    rhsh2 = zeros(size(h))
-    rhshu2 = zeros(size(h))
-    LK = zeros(size(h))
-    for e = 1:size(h,2)
-        for k = 1:size(h,1)
-            l_k = 1
-            if rhsh_Diff2[k,e] < 0
-                l_k = -( 2*h[k,e] + dt*(rhsh_ID2[k,e]+ rhsh1[k,e])-tol ) / (dt*rhsh_Diff2[k,e] )
-                l_k = min(l_k, 1);
-            end
-            l_k = max(l_k,0)
-            if h[k,e]<=tol
-                l_k = 0
-            end
-            # if l_k == 0
-            #         error("!!!!!")
-            # end
-            # l_k = 0
-            L[k,e] = l_k
-            rhsh2[k,e]  = rhsh_ID2[k,e]  + rhsh_Diff2[k,e] *l_k
-            rhshu2[k,e] = rhshu_ID2[k,e] + rhshu_Diff2[k,e]*l_k
-        end
+    lambda = maximum(abs.(hutmp./htmp)+sqrt.(g.*htmp))
+    dt2 = min(T-t, minimum(w)*J[1]/(2*lambda), dT);
+    while dt2<dt1
+        dt1 = dt2
+        # rhsh1, rhshu1, L1 = convex_limiter(rhsh_ES1, rhshu_ES1, rhsh_ID1, rhshu_ID1, h, h, tol, dt1)
+        htmp  = h  + dt1*rhsh1
+        hutmp = hu + dt1*rhshu1
+        lambda = maximum(abs.(hutmp./htmp)+sqrt.(g.*htmp))
+        dt2 = min(T-t, minimum(w)*J[1]/(2*lambda), dT);
     end
-    @show L, h
+
+    rhsh_ES2, rhshu_ES2, rhsh_ID2, rhshu_ID2 = rhs(htmp,hutmp,ops,vgeo,fgeo,mapP,0)
+    dt = min(dt1, dt2)
+    rhsh2, rhshu2, L2 = convex_limiter(rhsh_ES2, rhshu_ES2, rhsh_ID2, rhshu_ID2, htmp, h, tol, dt)
+    # rhsh_ES = rhsh_ES2; rhshu_ES = rhshu_ES2; rhsh_ID = rhsh_ID2; rhshu_ID = rhshu_ID2;
+    # dt = min(T-t, minimum(w)/(2*lambda), dT);
+    # if dt< dT
+    #     rhsh2 = rhsh_ID2;
+    #     rhshu2 = rhshu_ID2;
+    # end
     h  .+= .5*dt*(rhsh1  + rhsh2)
     hu .+= .5*dt*(rhshu1 + rhshu2)
+    hu[findall(x->x<2*tol, h)] .= 0
+    # @show L2, h, dt
     h_min, pos = findmin(h)
-    if h_min < 0
-       error("h_min<0 ", h_min, pos, "iteration ", i )
+    if h_min <=0
+        @show L2
+        @show maximum(hu./h)
+        error("h_min<0 ", h_min, pos, "iteration ", i )
     end
     u = (h,hu)
-
-    if i%10==0 || i==Nsteps
+    t +=dt
+    if t>=T
+            break
+    end
+    # @show L1, L2
+    DT[i] = dt
+    i +=1
+    if t>= t_plot #|| i==Nsteps
+        t_plot += dT*10;
         # u = reshape(u,size(x,1),size(x,2))
         println("Number of time steps $i out of $Nsteps")
         # display(plot(Vp*x,Vp*u,ylims=(-.1,1.1)))
         # push!(plt, Vp*x,Vp*u,ylims=(-.1,1.1))
-        plot(Vp*x,Vp*h,ylims=(-.1,4),title="Timestep $i out of $Nsteps",lw=2)
+        plot(Vp*x,Vp*h,ylims=(-.1,4),title="Timestep $i, time $t",lw=2)
         scatter!(x,h)
+        # scatter!(x,transpose(L2)*ones(1, size(h,1)))
         # sleep(.0)
     end
-end every 10
-
+end #every 10
+DT = DT[1:findmin(DT)[2]-1];
 # plot(Vp*x,Vp*u,ylims=(-.1,1.1))
