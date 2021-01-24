@@ -179,8 +179,8 @@ function fS2D(UL,UR,g)
 end
 
 "Approximation parameters"
-N   = 3 # The order of approximation
-K1D = 16
+N   = 2 # The order of approximation
+K1D = 2
 CFL = 0.25
 T   = 0.5 # endtime
 global g = 1.0
@@ -285,33 +285,6 @@ function rhsx(u,ops,vgeo,fgeo,nodemaps)
     rhsu = dudx + EfTW*(.5*nxJ.*(uM[mapP]))
     return rhsu
 end
-
-# can check that norm(sum(Qx,dims=2)) ≈ 0 and that Qx = skew-symmetric
-# Qx = build_rhs_matrix(rhsx,size(u,1),size(u,2),ops,vgeo,fgeo,nodemaps)
-# invM = spdiagm(0 => 1 ./vec(diagm(wq)*J))
-#
-# function rhs_global(u, invM, Qx)
-#     rows = rowvals(Qx)
-#     vals = nonzeros(Qx)
-#
-#     rhsu = zero.(u)
-#     for j = 1:size(Qx, 2) # loop over columns
-#         uj = u[j]
-#         for index in nzrange(Qx, j) # loop over rows
-#             i = rows[index]
-#
-#             Qxij = vals[index]
-#             dij = abs.(Qxij)
-#             rhsu[i] += Qxij * uj - dij * (uj - u[i])
-#             # if floor((i-1)/length(wq)) == floor((j-1)/length(wq))
-#             # # if i<=length(wq) && j<= length(wq)
-#             #     rhsu[i] -= dij * (uj - u[i])
-#             #     @show i, j, dij
-#             # end
-#         end
-#     end
-#     return -invM * rhsu
-# end
 
 function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
     # unpack args

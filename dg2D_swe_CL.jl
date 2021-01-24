@@ -21,8 +21,8 @@ const g = 1.0
 N   = 3 # The order of approximation
 K1D = 8
 CFL = 1/4
-T   = 1 # endtimeA
-MAXIT = 100
+T   = 0.5 # endtimeA
+MAXIT = 10000000
 
 function build_meshfree_sbp(rq,sq,wq,rf,sf,wf,nrJ,nsJ,α)
     # [-1,1,0], [-1,-1,sqrt(4/3)]
@@ -319,14 +319,19 @@ yq = Vq*y
 # u = @. exp(-25*(xq^2+yq^2))
 # u0 = u
 # h = @. exp(-25*( xq^2+yq^2))+2
+
 h = ones(size(xq))
-col_idx = zeros(convert(Int, size(h,2)/4) )
-for i = 0:convert(Int,K1D/2)-1
-    idx_start = convert(Int, K1D*K1D*2/4) + i*K1D*2 + convert(Int,K1D/2)
-    col_idx[i*K1D+1:(i+1)*K1D] = idx_start+1:idx_start+convert(Int,K1D)
-end
-col_idx = convert.(Int, col_idx)
-h[:,col_idx] .= 1e-10;# h[:,K1D+1:end] .= 1
+# col_idx = zeros(convert(Int, size(h,2)/4) )
+# for i = 0:convert(Int,K1D/2)-1
+#     idx_start = convert(Int, K1D*K1D*2/4) + i*K1D*2 + convert(Int,K1D/2)
+#     col_idx[i*K1D+1:(i+1)*K1D] = idx_start+1:idx_start+convert(Int,K1D)
+# end
+# col_idx = convert.(Int, col_idx)
+# h[:,col_idx] .= 1e-10;# h[:,K1D+1:end] .= 1
+
+h[:,1:K1D] .= 1e-10; h[:,K1D+1:end] .= 1
+
+
 hu = h*0
 hv = h*0
 u = (h, hu, hv)
@@ -374,34 +379,29 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
     rhs3_ES = zeros(size(h));
 
     # % loop over all elements
-    for e = 1:K
-        hx, hy  = meshgrid(h[:,e] );
-        hux,huy = meshgrid(hu[:,e]);
-        hvx,hvy = meshgrid(hv[:,e]);
-        UL_ES = (hx, hux, hvx)
-        UR_ES = (hy, huy, hvy)
-        # % get the flux for each component and both directions
-        (FxV1,FxV2,FxV3),(FyV1,FyV2,FyV3) = fS2D(UL_ES,UR_ES,g)
-
-        # % build the QNx and QNy for each elements
-        QNx = 1/2*( diagm(rxJ[:,e])*Qr_ES + Qr_ES*diagm(rxJ[:,e]) + diagm(sxJ[:,e])*Qs_ES + Qs_ES*diagm(sxJ[:,e]) );
-        QNy = 1/2*( diagm(ryJ[:,e])*Qr_ES + Qr_ES*diagm(ryJ[:,e]) + diagm(syJ[:,e])*Qs_ES + Qs_ES*diagm(syJ[:,e]) );
-
-        # % VTr Me*PN = [Vq' Vf']
-        rhs1_ES[:,e] = 2*(sum(QNx.*FxV1,dims = 2) + sum(QNy.*FyV1,dims = 2));
-        rhs2_ES[:,e] = 2*(sum(QNx.*FxV2,dims = 2) + sum(QNy.*FyV2,dims = 2));
-        rhs3_ES[:,e] = 2*(sum(QNx.*FxV3,dims = 2) + sum(QNy.*FyV3,dims = 2));
-
-        # rhs2[:,e] = rhs2[:,e] + g*(h[:,e].*(QNx*b[:,e]));
-        # rhs3[:,e] = rhs3[:,e] + g*(h[:,e].*(QNy*b[:,e]));
+    for e = 1:size(h,2)
+        for i=1:size(h,1)
+            UL_ES = (h[i,e], hu[i,e], hv[i,e]);
+            for j=1:size(h,1)
+                UR_ES = (h[j,e], hu[j,e], hv[j,e])
+                (FxV1,FxV2,FxV3),(FyV1,FyV2,FyV3) = fS2D(UL_ES,UR_ES,g)
+                QNx_ij = Qr_ES[i,j]*(rxJ[i,e]+ rxJ[j,e]) + Qs_ES[i,j]*(sxJ[i,e]+ sxJ[j,e]);
+                QNy_ij = Qr_ES[i,j]*(ryJ[i,e]+ ryJ[j,e]) + Qs_ES[i,j]*(syJ[i,e]+ syJ[j,e]);
+                rhs1_ES[i,e] += (QNx_ij*FxV1 + QNy_ij*FyV1);
+                rhs2_ES[i,e] += (QNx_ij*FxV2 + QNy_ij*FyV2);
+                rhs3_ES[i,e] += (QNx_ij*FxV3 + QNy_ij*FyV3);
+            end
+        end
     end
     rhs1_ES = rhs1_ES + Pf*f1;
     rhs2_ES = rhs2_ES + Pf*f2;
     rhs3_ES = rhs3_ES + Pf*f3;
 
     # ID part
-    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UR,UR,g)
-    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(U,U,g)
+    # (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UR,UR,g)
+    # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(U,U,g)
+    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
+    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D(U,U,g)
 
     fs1 = @. fxS1*nxJ + fyS1*nyJ;
     fs2 = @. fxS2*nxJ + fyS2*nyJ;
@@ -458,9 +458,8 @@ for i = 1:MAXIT
     lambda = maximum(sqrt.((hu./h).^2+(hv./h).^2)+sqrt.(g.*h))
     dt1 = min(T-t, minimum(wq)*J[1]/(2*lambda), dT);
     rhs_1, L1 = convex_limiter(rhs_ES1, rhs_ID1, h, h, tol, dt1)
-    # if dt<dT
-    #     rhsh1 = rhsh_ID1;
-    #     rhshu1 = rhshu_ID1;
+    # if dt1<dT
+    #     rhs_1 = rhs_ID1;
     # end
     htmp  = h  + dt1*rhs_1[1]
     hutmp = hu + dt1*rhs_1[2]
@@ -492,9 +491,8 @@ for i = 1:MAXIT
     rhs_2, L2 = convex_limiter(rhs_ES2, rhs_ID2, htmp, h, tol, dt)
     # rhsh_ES = rhsh_ES2; rhshu_ES = rhshu_ES2; rhsh_ID = rhsh_ID2; rhshu_ID = rhshu_ID2;
     # dt = min(T-t, minimum(w)/(2*lambda), dT);
-    # if dt< dT
-    #     rhsh2 = rhsh_ID2;
-    #     rhshu2 = rhshu_ID2;
+    # if dt1<dT
+    #     rhs_2 = rhs_ID2;
     # end
     h  .+= .5*dt*(rhs_1[1] + rhs_2[1])
     hu .+= .5*dt*(rhs_1[2] + rhs_2[2])
@@ -523,31 +521,6 @@ for i = 1:MAXIT
 end
 DT = DT[1:findmin(DT)[2]-1];
 
-# u = vec(u)
-# for i = 1:Nsteps
-#     global h, hu, hv, u # for scoping - these variables are updated
-#
-#     # Heun's method - this is an example of a 2nd order SSP RK method
-#     local rhs1_ES, rhs2_ES, rhs3_ES, rhs1_ID, rhs2_ID, rhs3_ID= swe_2d_rhs(u,ops,dis_cst,vgeo,fgeo,nodemaps)
-#     htmp  = h  + dt*rhs1
-#     hutmp = hu + dt*rhs2
-#     hvtmp = hv + dt*rhs3
-#     utmp  = (htmp, hutmp, hvtmp)
-#     htmp, hutmp, hvtmp = swe_2d_rhs(utmp,ops,dis_cst,vgeo,fgeo,nodemaps)
-#     h  .+= .5*dt*(rhsh + htmp)
-#     hu .+= .5*dt*(rhshu + hutmp)
-#     hv .+= .5*dt*(rhshv + hvtmp)
-#     u = (h,hu,hv)
-#
-#     if i%10==0 || i==Nsteps
-#         println("Number of time steps $i out of $Nsteps")
-#     end
-# end
-
-# rhsu_g = rhs_global(vec(u),invM,Qx)
-# rhsu_g = reshape(rhsu_g,size(xq,1),size(xq,2))
-# u = reshape(u,size(xq,1),size(xq,2))
-
 gr(aspect_ratio=1,legend=false,
    markerstrokewidth=0,markersize=2)
 
@@ -556,10 +529,3 @@ rp, sp = equi_nodes(10)
 Vp = vandermonde(N,rp,sp)/vandermonde(N,r,s)
 vv = Vp*Pq*h
 Plots.scatter(Vp*x,Vp*y,vv,zcolor=vv,camera=(0,90))
-
-
-# for i = 1:size(h,2)
-#     if maximum(xq[:,i]) <= .5 && minimum(xq[:,i])>= -.5 && maximum(yq[:,i]) <= .5 && minimum(yq[:,i]) >= -.5
-#         col_idx[i] = i;
-#     end
-# end
