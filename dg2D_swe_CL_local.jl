@@ -399,32 +399,41 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
 
     # ID part
     (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
-    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(U,U,g)
+    # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(U,U,g)
 
     fs1 = @. fxS1*nxJ + fyS1*nyJ;
     fs2 = @. fxS2*nxJ + fyS2*nyJ;
     fs3 = @. fxS3*nxJ + fyS3*nyJ;
-    dhdx  = rxJ.*(Qr_ID*fxV1) + sxJ.*(Qs_ID*fxV1)
-    dhudx = rxJ.*(Qr_ID*fxV2) + sxJ.*(Qs_ID*fxV2)
-    dhvdx = rxJ.*(Qr_ID*fxV3) + sxJ.*(Qs_ID*fxV3)
 
-    dhdy  = ryJ.*(Qr_ID*fyV1) + syJ.*(Qs_ID*fyV1)
-    dhudy = ryJ.*(Qr_ID*fyV2) + syJ.*(Qs_ID*fyV2)
-    dhvdy = ryJ.*(Qr_ID*fyV3) + syJ.*(Qs_ID*fyV3)
+    rhs1_ID = zeros(size(h));
+    rhs2_ID = zeros(size(h));
+    rhs3_ID = zeros(size(h));
 
-    rhs1_ID = dhdx  + dhdy  + EfTW * (0.5*fs1)
-    rhs2_ID = dhudx + dhudy + EfTW * (0.5*fs2)
-    rhs3_ID = dhvdx + dhvdy + EfTW * (0.5*fs3)
-    # @show rhsh rhshu rhshv
-    # lambda = abs.(u.*u+v.*v)+sqrt.(g.*h)
 
-    rhs1_ID -= transpose(E)*(Cf.*c.*dh)
-    rhs2_ID -= transpose(E)*(Cf.*c.*dhu)
-    rhs3_ID -= transpose(E)*(Cf.*c.*dhv)
+    rhs1_ID = EfTW * (0.5*fs1) - transpose(E)*(Cf.*c.*dh)
+    rhs2_ID = EfTW * (0.5*fs2) - transpose(E)*(Cf.*c.*dhu)
+    rhs3_ID = EfTW * (0.5*fs3) - transpose(E)*(Cf.*c.*dhv)
 
     for e = 1:size(h,2)
         for i = 1:size(Qr_ID, 1) # loop over rows
+            # UL_ID = (h[i,e], hu[i,e], hv[i,e]);
+            rxJ_i = rxJ[i,e]; sxJ_i = sxJ[i,e];
+            ryJ_i = ryJ[i,e]; syJ_i = syJ[i,e];
             for j = 1:size(Qr_ID, 2) # loop over columns
+                UR_ID = (h[j,e], hu[j,e], hv[j,e])
+                (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UR_ID,UR_ID,g)
+                Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
+                dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
+                dhudx = rxJ_i*(Qr_ID_ij*fxV2) + sxJ_i*(Qs_ID_ij*fxV2)
+                dhvdx = rxJ_i*(Qr_ID_ij*fxV3) + sxJ_i*(Qs_ID_ij*fxV3)
+
+                dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
+                dhudy = ryJ_i*(Qr_ID_ij*fyV2) + syJ_i*(Qs_ID_ij*fyV2)
+                dhvdy = ryJ_i*(Qr_ID_ij*fyV3) + syJ_i*(Qs_ID_ij*fyV3)
+                # @show dhdx, dhudx,dhvdx,  dhdy, dhudy, dhvdy
+                rhs1_ID[i,e] += dhdx  + dhdy
+                rhs2_ID[i,e] += dhudx + dhudy
+                rhs3_ID[i,e] += dhvdx + dhvdy
                 cij = C[i,j]
                 if cij!=0
                     # @show i, j, dij
@@ -457,7 +466,7 @@ for i = 1:MAXIT
     # Heun's method - this is an example of a 2nd order SSP RK method
     local rhs_ES1, rhs_ID1 = swe_2d_rhs(u,ops,dis_cst,vgeo,fgeo,nodemaps)
     lambda = maximum(sqrt.((hu./h).^2+(hv./h).^2)+sqrt.(g.*h))
-    dt1 = min(T-t, minimum(wq)*J[1]/(2*lambda), dT);
+    dt1 = min(T-t, minimum(wq)*J[1]/(lambda), dT);
     rhs_1, L1 = convex_limiter(rhs_ES1, rhs_ID1, h, h, tol, dt1)
     # if dt1<dT
     #     rhs_1 = rhs_ID1;
@@ -477,14 +486,14 @@ for i = 1:MAXIT
        error("htmp_min<0 ", h_min, pos, "iteration ", i )
     end
     lambda = maximum(sqrt.((hutmp./htmp).^2+(hvtmp./htmp).^2)+sqrt.(g.*htmp))
-    dt2 = min(T-t, minimum(wq)*J[1]/(2*lambda), dT);
+    dt2 = min(T-t, minimum(wq)*J[1]/(lambda), dT);
     while dt2<dt1
         dt1 = dt2
         htmp  = h  + dt1*rhs_1[1]
         hutmp = hu + dt1*rhs_1[2]
         hvtmp = hv + dt1*rhs_1[3]
         lambda = maximum(sqrt.((hutmp./htmp).^2+(hvtmp./htmp).^2)+sqrt.(g.*htmp))
-        dt2 = min(T-t, minimum(wq)*J[1]/(2*lambda), dT);
+        dt2 = min(T-t, minimum(wq)*J[1]/(lambda), dT);
     end
     utmp = (htmp, hutmp, hvtmp)
     rhs_ES2, rhs_ID2 = swe_2d_rhs(utmp,ops,dis_cst,vgeo,fgeo,nodemaps)
@@ -503,7 +512,7 @@ for i = 1:MAXIT
     hv[findall(x->x<2*tol, h)] .= 0
     # @show L2, h, dt
     h_min, pos = findmin(h)
-    s2 = sum(h)+sum(hu)+sum(hv)
+    # s2 = sum(h)+sum(hu)+sum(hv)
     # @show norm(s2-s1)
     # @show sum(rhs_1[1] + rhs_2[1])
     # @show sum(rhs_1[2] + rhs_2[2])
