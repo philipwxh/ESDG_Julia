@@ -15,14 +15,14 @@ using NodesAndModes.Tri
 using UnPack
 using StartUpDG
 using StartUpDG.ExplicitTimestepUtils
-
+#39700 to 0.5
 const g = 1.0
 "Approximation parameters"
 N   = 3 # The order of approximation
 K1D = 8
 CFL = 1/4
 T   = 0.5 # endtimeA
-MAXIT = 100#0000000
+MAXIT = 1000#000000
 ts_ft= 1
 
 function build_meshfree_sbp(rq,sq,wq,rf,sf,wf,nrJ,nsJ,α)
@@ -459,7 +459,7 @@ t_plot = dT*10
 global i;
 @time begin
 for i = 1:MAXIT
-    if i%100 == 0
+    if i%1000 == 0
         @show i, t
     end
     global h, hu, hv, u, t, t_plot

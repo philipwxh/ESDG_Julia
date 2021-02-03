@@ -22,7 +22,7 @@ N   = 3 # The order of approximation
 K1D = 8
 CFL = 1/4
 T   = 0.5 # endtimeA
-MAXIT = 1000#000000
+MAXIT = 1000000000
 ts_ft= 1
 
 function build_meshfree_sbp(rq,sq,wq,rf,sf,wf,nrJ,nsJ,α)
@@ -407,41 +407,39 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
 
     # % loop over all elements
     for e = 1:size(h,2)
-        rxJ_i = rxJ[1,e]; sxJ_i = sxJ[1,e];
-        ryJ_i = ryJ[1,e]; syJ_i = syJ[1,e];
+        # rxJ_i = rxJ[1,e]; sxJ_i = sxJ[1,e];
+        # ryJ_i = ryJ[1,e]; syJ_i = syJ[1,e];
         for i=1:size(h,1)
+            rxJ_i = rxJ[i,e]; sxJ_i = sxJ[i,e];
+            ryJ_i = ryJ[i,e]; syJ_i = syJ[i,e];
             UL_ES = (h[i,e], hu[i,e], hv[i,e]);
-            # rxJ_i = rxJ[i,e]; sxJ_i = sxJ[i,e];
-            # ryJ_i = ryJ[i,e]; syJ_i = syJ[i,e];
             for j=1:size(h,1)
                 UR_ES = (h[j,e], hu[j,e], hv[j,e])
                 (FxV1,FxV2,FxV3),(FyV1,FyV2,FyV3) = fS2D(UL_ES,UR_ES,g)
-                # QNx_ij = Qr_ES[i,j]*(rxJ[i,e]+ rxJ[j,e]) + Qs_ES[i,j]*(sxJ[i,e]+ sxJ[j,e]);
-                # QNy_ij = Qr_ES[i,j]*(ryJ[i,e]+ ryJ[j,e]) + Qs_ES[i,j]*(syJ[i,e]+ syJ[j,e]);
-                QNx_ij = Qr_ES[i,j]*(rxJ_i*2) + Qs_ES[i,j]*(sxJ_i*2);
-                QNy_ij = Qr_ES[i,j]*(ryJ_i*2) + Qs_ES[i,j]*(syJ_i*2);
+                QNx_ij = Qr_ES[i,j]*(rxJ[i,e]+ rxJ[j,e]) + Qs_ES[i,j]*(sxJ[i,e]+ sxJ[j,e]);
+                QNy_ij = Qr_ES[i,j]*(ryJ[i,e]+ ryJ[j,e]) + Qs_ES[i,j]*(syJ[i,e]+ syJ[j,e]);
+                # QNx_ij = Qr_ES[i,j]*(rxJ_i*2) + Qs_ES[i,j]*(sxJ_i*2);
+                # QNy_ij = Qr_ES[i,j]*(ryJ_i*2) + Qs_ES[i,j]*(syJ_i*2);
                 rhs1_ES[i,e] += (QNx_ij*FxV1 + QNy_ij*FyV1);
                 rhs2_ES[i,e] += (QNx_ij*FxV2 + QNy_ij*FyV2);
                 rhs3_ES[i,e] += (QNx_ij*FxV3 + QNy_ij*FyV3);
 
+                UR_ID = (h[j,e], hu[j,e], hv[j,e])
+                (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UR_ID,UR_ID,g)
+                Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
+                dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
+                dhudx = rxJ_i*(Qr_ID_ij*fxV2) + sxJ_i*(Qs_ID_ij*fxV2)
+                dhvdx = rxJ_i*(Qr_ID_ij*fxV3) + sxJ_i*(Qs_ID_ij*fxV3)
+
+                dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
+                dhudy = ryJ_i*(Qr_ID_ij*fyV2) + syJ_i*(Qs_ID_ij*fyV2)
+                dhvdy = ryJ_i*(Qr_ID_ij*fyV3) + syJ_i*(Qs_ID_ij*fyV3)
+                # @show dhdx, dhudx,dhvdx,  dhdy, dhudy, dhvdy
+                rhs1_ID[i,e] += dhdx  + dhdy
+                rhs2_ID[i,e] += dhudx + dhudy
+                rhs3_ID[i,e] += dhvdx + dhvdy
                 cij = C[i,j]
                 if cij!=0
-                    UR_ID = (h[j,e], hu[j,e], hv[j,e])
-                    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UR_ID,UR_ID,g)
-                    Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
-                    dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
-                    dhudx = rxJ_i*(Qr_ID_ij*fxV2) + sxJ_i*(Qs_ID_ij*fxV2)
-                    dhvdx = rxJ_i*(Qr_ID_ij*fxV3) + sxJ_i*(Qs_ID_ij*fxV3)
-
-                    dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
-                    dhudy = ryJ_i*(Qr_ID_ij*fyV2) + syJ_i*(Qs_ID_ij*fyV2)
-                    dhvdy = ryJ_i*(Qr_ID_ij*fyV3) + syJ_i*(Qs_ID_ij*fyV3)
-                    # @show dhdx, dhudx,dhvdx,  dhdy, dhudy, dhvdy
-                    rhs1_ID[i,e] += dhdx  + dhdy
-                    rhs2_ID[i,e] += dhudx + dhudy
-                    rhs3_ID[i,e] += dhvdx + dhvdy
-                # cij = C[i,j]
-                # if cij!=0
                     # @show i, j, dij
                     lambda_i = abs.(u[i,e].*C_x[i,j]+v[i,e].*C_y[i,j])+sqrt.(g.*h[i,e])
                     lambda_j = abs.(u[j,e].*C_x[j,i]+v[j,e].*C_y[j,i])+sqrt.(g.*h[j,e])
