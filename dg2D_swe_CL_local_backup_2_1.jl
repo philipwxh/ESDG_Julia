@@ -19,7 +19,7 @@ using StartUpDG.ExplicitTimestepUtils
 const g = 1.0
 "Approximation parameters"
 N   = 3 # The order of approximation
-K1D = 16
+K1D = 8
 CFL = 1/4
 T   = 0.5 # endtimeA
 MAXIT = 10000000000
@@ -387,6 +387,23 @@ function swe_2d_ID_surface(UL, UR, dU, Pf, c)
     return f1_ID, f2_ID, f3_ID
 end
 
+function swe_2d_ID_vol(UL_E, Qr_ID, Qs_ID, vgeo_e, i, j)
+    (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
+    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
+    Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
+    dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
+    dhudx = rxJ_i*(Qr_ID_ij*fxV2) + sxJ_i*(Qs_ID_ij*fxV2)
+    dhvdx = rxJ_i*(Qr_ID_ij*fxV3) + sxJ_i*(Qs_ID_ij*fxV3)
+
+    dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
+    dhudy = ryJ_i*(Qr_ID_ij*fyV2) + syJ_i*(Qs_ID_ij*fyV2)
+    dhvdy = ryJ_i*(Qr_ID_ij*fyV3) + syJ_i*(Qs_ID_ij*fyV3)
+    fv1_ID = dhdx  + dhdy
+    fv2_ID = dhudx + dhudy
+    fv3_ID = dhvdx + dhvdy
+    return fv1_ID, fv2_ID, fv3_ID
+end
+
 function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
     # unpack args
     h, hu, hv = U
@@ -437,35 +454,17 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
 
                 cij = C[i,j]
                 if cij!=0
-                    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UR_E,UR_E,g)
-                    Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
-                    dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
-                    dhudx = rxJ_i*(Qr_ID_ij*fxV2) + sxJ_i*(Qs_ID_ij*fxV2)
-                    dhvdx = rxJ_i*(Qr_ID_ij*fxV3) + sxJ_i*(Qs_ID_ij*fxV3)
+                    fv1_i_ID, fv2_i_ID, fv3_i_ID = swe_2d_ID_vol(UR_E, Qr_ID, Qs_ID, vgeo_e, i, j);
+                    fv1_j_ID, fv2_j_ID, fv3_j_ID = swe_2d_ID_vol(UL_E, Qr_ID, Qs_ID, vgeo_e, j, i);
 
-                    dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
-                    dhudy = ryJ_i*(Qr_ID_ij*fyV2) + syJ_i*(Qs_ID_ij*fyV2)
-                    dhvdy = ryJ_i*(Qr_ID_ij*fyV3) + syJ_i*(Qs_ID_ij*fyV3)
-                    rhs1_ID[i,e] += dhdx  + dhdy
-                    rhs2_ID[i,e] += dhudx + dhudy
-                    rhs3_ID[i,e] += dhvdx + dhvdy
 
-                    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
-                    # Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
-                    dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
-                    dhudx = rxJ_i*(Qr_ID_ij*fxV2) + sxJ_i*(Qs_ID_ij*fxV2)
-                    dhvdx = rxJ_i*(Qr_ID_ij*fxV3) + sxJ_i*(Qs_ID_ij*fxV3)
+                    rhs1_ID[i,e] += fv1_i_ID
+                    rhs2_ID[i,e] += fv2_i_ID
+                    rhs3_ID[i,e] += fv3_i_ID
+                    rhs1_ID[j,e] += fv1_j_ID
+                    rhs2_ID[j,e] += fv2_j_ID
+                    rhs3_ID[j,e] += fv3_j_ID
 
-                    dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
-                    dhudy = ryJ_i*(Qr_ID_ij*fyV2) + syJ_i*(Qs_ID_ij*fyV2)
-                    dhvdy = ryJ_i*(Qr_ID_ij*fyV3) + syJ_i*(Qs_ID_ij*fyV3)
-                    # @show dhdx, dhudx,dhvdx,  dhdy, dhudy, dhvdy
-                    rhs1_ID[j,e] -= dhdx  + dhdy
-                    rhs2_ID[j,e] -= dhudx + dhudy
-                    rhs3_ID[j,e] -= dhvdx + dhvdy
-                # cij = C[i,j]
-                # if cij!=0
-                    # @show i, j, dij
                     lambda_i = abs.(u[i,e].*C_x[i,j]+v[i,e].*C_y[i,j])+sqrt.(g.*h[i,e])
                     lambda_j = abs.(u[j,e].*C_x[j,i]+v[j,e].*C_y[j,i])+sqrt.(g.*h[j,e])
                     lambda = max(lambda_i, lambda_j)

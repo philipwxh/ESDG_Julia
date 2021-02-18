@@ -22,7 +22,9 @@ N   = 3 # The order of approximation
 K1D = 8
 CFL = 1/4
 T   = 0.5 # endtimeA
-MAXIT = 100#0000000
+MAXIT = 1000000
+
+ts_ft= 1/4
 
 function build_meshfree_sbp(rq,sq,wq,rf,sf,wf,nrJ,nsJ,α)
     # [-1,1,0], [-1,-1,sqrt(4/3)]
@@ -179,40 +181,17 @@ function fS2D_LF(UL,UR,g)
     return (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3)
 end
 
-function convex_limiter(rhs_ES, rhs_ID, hh, htmp, tol, dt)
-    rhs1_ES, rhs2_ES, rhs3_ES = rhs_ES
-    rhs1_ID, rhs2_ID, rhs3_ID = rhs_ID
-    rhs1_Diff = rhs1_ES - rhs1_ID; rhs2_Diff = rhs2_ES - rhs2_ID; rhs3_Diff = rhs3_ES - rhs3_ID;
-    rhs1 = zeros(size(hh)); rhs2 = zeros(size(hh)); rhs3 = zeros(size(hh));
-    L = ones(1,size(hh,2));
-    for e = 1:size(hh,2)
-        for k = 1:size(hh,1)
-            l_k = 1
-            if rhs1_Diff[k,e] < 0
-                l_k = -(hh[k,e] + dt*rhs1_ID[k,e]-tol) / (dt*(rhs1_Diff[k,e]))
-                l_k = min(l_k, 1)
-            end
-            l_k = max(l_k,0)
-            L[e] = min(L[e], l_k);
-            if hh[k,e] <= tol || htmp[k,e] <= tol || norm(rhs1_Diff)<=tol
-                L[e] = 0
-                # if e == 1
-                #     L[e+1] = 0
-                #     L[end] = 0
-                # elseif  e == K1D
-                #     L[e-1] = 0
-                #     L[1] = 0
-                # else
-                #     L[e+1] = 0
-                #     L[e-1] = 0
-                # end
-            end
-        end
-        rhs1[:,e] = rhs1_ID[:,e] + rhs1_Diff[:,e] * L[e]
-        rhs2[:,e] = rhs2_ID[:,e] + rhs2_Diff[:,e] * L[e]
-        rhs3[:,e] = rhs3_ID[:,e] + rhs3_Diff[:,e] * L[e]
+function ESDG_bottom(Qr,Qs,btm,vgeo,g)
+    rxJ,sxJ,ryJ,syJ,J = vgeo
+    gQNxb = zeros(size(btm))
+    gQNyb = zeros(size(btm))
+    for e = 1:size(h,2)
+        QNx = 1/2*( diagm(rxJ[:,e])*Qr + Qr*diagm(rxJ[:,e]) + diagm(sxJ[:,e])*Qs + Qs*diagm(sxJ[:,e]) );
+        QNy = 1/2*( diagm(ryJ[:,e])*Qr + Qr*diagm(ryJ[:,e]) + diagm(syJ[:,e])*Qs + Qs*diagm(syJ[:,e]) );
+        gQNxb[:,e] = g*QNx*btm[:,e];
+        gQNxb[:,e] = g*QNy*btm[:,e];
     end
-    return (rhs1, rhs2, rhs3), L
+    return gQNxb, gQNyb
 end
 
 # Mesh related variables
@@ -289,12 +268,11 @@ QNr_sbp = VN_sbp'*QNr*VN_sbp;
 QNs_sbp = VN_sbp'*QNs*VN_sbp;
 @show norm(QNs_sbp+QNs_sbp' - E'*diagm(wf.*nsJ)*E)
 
-#  QNr = .5*(QNr-QNr');
-#  QNs = .5*(QNs-QNs');
 Qrskew_ES = .5*(QNr_sbp-QNr_sbp');
 Qsskew_ES = .5*(QNs_sbp-QNs_sbp');
 
 M_inv = diagm(@. 1/(wq*J[1][1]))
+Mf_inv = E*M_inv*E';
 Pf = transpose(E)*diagm(wf)
 Cf = abs.(rxJ[1,1]*diag(Qr_ID)[1:length(wf)] + ryJ[1,1]*diag(Qr_ID)[1:length(wf)] + syJ[1,1]*diag(Qs_ID)[1:length(wf)])
 
@@ -315,12 +293,16 @@ dt = T/Nsteps
 "initial conditions"
 xq = Vq*x
 yq = Vq*y
+btm = sin.(xq) .+1;
+# btm = btm*0;
+h = xq*0 .+ 5 - btm;
+
 # u = @. sin(pi*xq)*sin(pi*yq)
 # u = @. exp(-25*(xq^2+yq^2))
 # u0 = u
 # h = @. exp(-25*( xq^2+yq^2))+2
 
-h = ones(size(xq))
+# h = ones(size(xq))
 # col_idx = zeros(convert(Int, size(h,2)/4) )
 # for i = 0:convert(Int,K1D/2)-1
 #     idx_start = convert(Int, K1D*K1D*2/4) + i*K1D*2 + convert(Int,K1D/2)
@@ -329,25 +311,113 @@ h = ones(size(xq))
 # col_idx = convert.(Int, col_idx)
 # h[:,col_idx] .= 1e-10;# h[:,K1D+1:end] .= 1
 
-h[:,1:K1D] .= 1e-10; h[:,K1D+1:end] .= 1
+# h[:,1:K1D] .= 1e-10; h[:,K1D+1:end] .= 1
 
 
 hu = h*0
 hv = h*0
-u = (h, hu, hv)
+# u = (h, hu, hv)
 
 "pack arguments into tuples"
-ops = (Qrskew_ID,Qsskew_ID, Qrskew_ES,Qsskew_ES,E, M_inv, Pf)
+ops = (Qrskew_ID,Qsskew_ID, Qrskew_ES,Qsskew_ES, QNr_sbp, QNs_sbp,E, M_inv, Mf_inv, Pf)
 dis_cst = (Cf, C, C_x, C_y)
 vgeo = (rxJ,sxJ,ryJ,syJ,J)
 fgeo = (nxJ,nyJ,sJ, nx, ny)
 nodemaps = (mapP,mapB)
+(gQNxb, gQNyb) =  ESDG_bottom(QNr_sbp, QNs_sbp, btm, vgeo, g);
+u = (h, hu, hv, btm, gQNxb, gQNyb)
 
 
-function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
+function swe_2d_esdg_surface(UL, UR, dU, Pf, c)
+    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
+    dh, dhu, dhv = dU
+    (hf, huf, hvf)=UL;
+    (hP, huP, hvP)=UR;
+    fs1 = @. fxS1*nxJ + fyS1*nyJ;
+    fs2 = @. fxS2*nxJ + fyS2*nyJ;
+    fs3 = @. fxS3*nxJ + fyS3*nyJ;
+    # @show findmin(hf)
+    tau = 1
+    f1_ES =  Pf*(fs1 .- .5*tau*c.*(hP.-hf).*sJ);
+    f2_ES =  Pf*(fs2 .- .5*tau*c.*(huP.-huf).*sJ);
+    f3_ES =  Pf*(fs3 .- .5*tau*c.*(hvP.-hvf).*sJ);
+    return f1_ES, f2_ES, f3_ES
+end
+
+function swe_2d_esdg_vol(UL_E, UR_E, ops, vgeo_e, i, j, btm, g)
+    Qr_ID,Qs_ID,Qr_ES,Qs_ES,QNr_sbp, QNs_sbp, E,M_inv,EfTW= ops
+    (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
+    (FxV1,FxV2,FxV3),(FyV1,FyV2,FyV3) = fS2D(UL_E,UR_E,g)
+    h_i, hu_i, hv_i = UL_E; h_j, hu_j, hv_j = UR_E;
+    # QNx_ij = Qr_ES[i,j]*(rxJ[i,e]+ rxJ[j,e]) + Qs_ES[i,j]*(sxJ[i,e]+ sxJ[j,e]);
+    # QNy_ij = Qr_ES[i,j]*(ryJ[i,e]+ ryJ[j,e]) + Qs_ES[i,j]*(syJ[i,e]+ syJ[j,e]);
+    QNx_ij = Qr_ES[i,j]*(rxJ_i*2) + Qs_ES[i,j]*(sxJ_i*2);
+    QNy_ij = Qr_ES[i,j]*(ryJ_i*2) + Qs_ES[i,j]*(syJ_i*2);
+
+    QNxb_ij = QNr_sbp[i,j]*(rxJ_i) + QNs_sbp[i,j]*(sxJ_i);
+    QNyb_ij = QNr_sbp[i,j]*(ryJ_i) + QNs_sbp[i,j]*(syJ_i);
+
+    fv1_ES = (QNx_ij*FxV1 + QNy_ij*FyV1);
+    # fv2_ES = (QNx_ij*FxV2 + QNy_ij*FyV2);
+    # fv3_ES = (QNx_ij*FxV3 + QNy_ij*FyV3);
+    fv2_i_ES = (QNx_ij*FxV2 + QNy_ij*FyV2) + g*h_i*QNxb_ij*btm[j];
+    fv3_i_ES = (QNx_ij*FxV3 + QNy_ij*FyV3) + g*h_i*QNyb_ij*btm[j];
+    fv2_j_ES = -(QNx_ij*FxV2 + QNy_ij*FyV2) - g*h_j*QNxb_ij*btm[i];
+    fv3_j_ES = -(QNx_ij*FxV3 + QNy_ij*FyV3) - g*h_j*QNyb_ij*btm[i];
+    return fv1_ES, fv2_i_ES, fv3_i_ES, -fv1_ES, fv2_j_ES, fv3_j_ES
+end
+
+function swe_2d_ID_surface(UL, UR, dU, Pf, c)
+    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
+    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
+    dh, dhu, dhv = dU
+    fs1 = @. fxS1*nxJ + fyS1*nyJ;
+    fs2 = @. fxS2*nxJ + fyS2*nyJ;
+    fs3 = @. fxS3*nxJ + fyS3*nyJ;
+    tau = 1
+    f1_ID = Pf * (0.5*fs1 .- .5*tau*c.*dh.*sJ)
+    f2_ID = Pf * (0.5*fs2 .- .5*tau*c.*dhu.*sJ)
+    f3_ID = Pf * (0.5*fs3 .- .5*tau*c.*dhv.*sJ)
+    # f1_ID = Pf * (0.5*fs1) - transpose(E)*(Cf.*c.*dh)
+    # f2_ID = Pf * (0.5*fs2) - transpose(E)*(Cf.*c.*dhu)
+    # f3_ID = Pf * (0.5*fs3) - transpose(E)*(Cf.*c.*dhv)
+    return f1_ID, f2_ID, f3_ID
+end
+
+function swe_2d_ID_vol(UL_E, Qr_ID, Qs_ID, vgeo_e, i, j)
+    (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
+    # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
+    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D(UL_E,UL_E,g)
+
+    Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
+    dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
+    dhudx = rxJ_i*(Qr_ID_ij*fxV2) + sxJ_i*(Qs_ID_ij*fxV2)
+    dhvdx = rxJ_i*(Qr_ID_ij*fxV3) + sxJ_i*(Qs_ID_ij*fxV3)
+
+    dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
+    dhudy = ryJ_i*(Qr_ID_ij*fyV2) + syJ_i*(Qs_ID_ij*fyV2)
+    dhvdy = ryJ_i*(Qr_ID_ij*fyV3) + syJ_i*(Qs_ID_ij*fyV3)
+    fv1_ID = dhdx  + dhdy
+    fv2_ID = dhudx + dhudy
+    fv3_ID = dhvdx + dhvdy
+    return fv1_ID, fv2_ID, fv3_ID
+end
+
+function swe_2d_ID_h(UL_E, Qr_ID, Qs_ID, vgeo_e, i, j)
+    (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
+    # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
+    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D(UL_E,UL_E,g)
+    Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
+    dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
+    dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
+    fv1_ID = dhdx  + dhdy
+    return fv1_ID
+end
+
+function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol)
     # unpack args
-    h, hu, hv = U
-    Qr_ID,Qs_ID,Qr_ES,Qs_ES,E,M_inv,EfTW= ops
+    h, hu, hv, btm, gQNxb, gQNyb  = U
+    Qr_ID,Qs_ID,Qr_ES,Qs_ES,QNr_sbp, QNs_sbp, E,M_inv,EfTW= ops
     Cf, C, C_x, C_y = dis_cst
     rxJ,sxJ,ryJ,syJ,J = vgeo
     nxJ,nyJ,sJ,nx,ny = fgeo
@@ -357,88 +427,124 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps)
     hf  = E*h; huf = E*hu; hvf = E*hv
     hP  = hf[mapP]; huP = huf[mapP] ;hvP = hvf[mapP]
     dh  = hP-hf; dhu = huP-huf; dhv = hvP-hvf
+    dU = (dh, dhu, dhv);
     UL = (hf, huf, hvf); UR = (hP, huP, hvP)
     lambdaf = abs.(uf.*nx+vf.*ny) + sqrt.(g*hf)
     lambdaP = lambdaf[mapP]
     c = max.(abs.(lambdaf), abs.(lambdaP))
 
+    ##surface part
     #ES part
-    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
+    f1_ES, f2_ES, f3_ES = swe_2d_esdg_surface(UL, UR, dU, Pf, c);
+    # @show norm(f1_ES_f - f1_ES), norm(f2_ES_f - f2_ES), norm(f3_ES_f - f3_ES)
+    #ID part
+    f1_ID, f2_ID, f3_ID = swe_2d_ID_surface(UL, UR, dU, Pf, c);
+    # f1_ID, f2_ID, f3_ID = swe_2d_esdg_surface(UL, UR, dU, Pf, c);
 
-    fs1 = @. fxS1*nxJ + fyS1*nyJ;
-    fs2 = @. fxS2*nxJ + fyS2*nyJ;
-    fs3 = @. fxS3*nxJ + fyS3*nyJ;
-    # @show findmin(hf)
-    tau = 1
-    f1 = @. fs1 - .5*tau*c*(hP-hf)*sJ;
-    f2 = @. fs2 - .5*tau*c*(huP-huf)*sJ;
-    f3 = @. fs3 - .5*tau*c*(hvP-hvf)*sJ;
-
-    rhs1_ES = zeros(size(h));
-    rhs2_ES = zeros(size(h));
-    rhs3_ES = zeros(size(h));
-
-    # % loop over all elements
+    rhs1_ID = zeros(size(h));
+    Nq = size(h,1); Nfq = size(E,1);
+    #build low order solution first
     for e = 1:size(h,2)
-        for i=1:size(h,1)
-            UL_ES = (h[i,e], hu[i,e], hv[i,e]);
-            for j=1:size(h,1)
-                UR_ES = (h[j,e], hu[j,e], hv[j,e])
-                (FxV1,FxV2,FxV3),(FyV1,FyV2,FyV3) = fS2D(UL_ES,UR_ES,g)
-                QNx_ij = Qr_ES[i,j]*(rxJ[i,e]+ rxJ[j,e]) + Qs_ES[i,j]*(sxJ[i,e]+ sxJ[j,e]);
-                QNy_ij = Qr_ES[i,j]*(ryJ[i,e]+ ryJ[j,e]) + Qs_ES[i,j]*(syJ[i,e]+ syJ[j,e]);
-                rhs1_ES[i,e] += (QNx_ij*FxV1 + QNy_ij*FyV1);
-                rhs2_ES[i,e] += (QNx_ij*FxV2 + QNy_ij*FyV2);
-                rhs3_ES[i,e] += (QNx_ij*FxV3 + QNy_ij*FyV3);
-            end
-        end
-    end
-    rhs1_ES = rhs1_ES + Pf*f1;
-    rhs2_ES = rhs2_ES + Pf*f2;
-    rhs3_ES = rhs3_ES + Pf*f3;
-
-    # ID part
-    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
-    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(U,U,g)
-
-    fs1 = @. fxS1*nxJ + fyS1*nyJ;
-    fs2 = @. fxS2*nxJ + fyS2*nyJ;
-    fs3 = @. fxS3*nxJ + fyS3*nyJ;
-    dhdx  = rxJ.*(Qr_ID*fxV1) + sxJ.*(Qs_ID*fxV1)
-    dhudx = rxJ.*(Qr_ID*fxV2) + sxJ.*(Qs_ID*fxV2)
-    dhvdx = rxJ.*(Qr_ID*fxV3) + sxJ.*(Qs_ID*fxV3)
-
-    dhdy  = ryJ.*(Qr_ID*fyV1) + syJ.*(Qs_ID*fyV1)
-    dhudy = ryJ.*(Qr_ID*fyV2) + syJ.*(Qs_ID*fyV2)
-    dhvdy = ryJ.*(Qr_ID*fyV3) + syJ.*(Qs_ID*fyV3)
-
-    rhs1_ID = dhdx  + dhdy  + EfTW * (0.5*fs1)
-    rhs2_ID = dhudx + dhudy + EfTW * (0.5*fs2)
-    rhs3_ID = dhvdx + dhvdy + EfTW * (0.5*fs3)
-    # @show rhsh rhshu rhshv
-    # lambda = abs.(u.*u+v.*v)+sqrt.(g.*h)
-
-    rhs1_ID -= transpose(E)*(Cf.*c.*dh)
-    rhs2_ID -= transpose(E)*(Cf.*c.*dhu)
-    rhs3_ID -= transpose(E)*(Cf.*c.*dhv)
-
-    for e = 1:size(h,2)
-        for i = 1:size(Qr_ID, 1) # loop over rows
-            for j = 1:size(Qr_ID, 2) # loop over columns
+        rxJ_i = rxJ[1,e]; sxJ_i = sxJ[1,e];
+        ryJ_i = ryJ[1,e]; syJ_i = syJ[1,e];
+        vgeo_e = (rxJ_i, sxJ_i, ryJ_i, syJ_i);
+        for i=1:Nq
+            UL_E = (h[i,e], hu[i,e], hv[i,e]);
+            for j=i:Nq
+                UR_E = (h[j,e], hu[j,e], hv[j,e])
                 cij = C[i,j]
                 if cij!=0
-                    # @show i, j, dij
+                    fv1_i_ID = swe_2d_ID_h(UR_E, Qr_ID, Qs_ID, vgeo_e, i, j);
+                    fv1_j_ID = swe_2d_ID_h(UL_E, Qr_ID, Qs_ID, vgeo_e, j, i);
+
+                    rhs1_ID[i,e] += fv1_i_ID; rhs1_ID[j,e] += fv1_j_ID;
                     lambda_i = abs.(u[i,e].*C_x[i,j]+v[i,e].*C_y[i,j])+sqrt.(g.*h[i,e])
                     lambda_j = abs.(u[j,e].*C_x[j,i]+v[j,e].*C_y[j,i])+sqrt.(g.*h[j,e])
                     lambda = max(lambda_i, lambda_j)
-                    rhs1_ID[i,e] -= cij * lambda * (h[j,e]  - h[i,e])
-                    rhs2_ID[i,e] -= cij * lambda * (hu[j,e] - hu[i,e])
-                    rhs3_ID[i,e] -= cij * lambda * (hv[j,e] - hv[i,e])
+                    d1 = cij * lambda * (h[j,e]  - h[i,e]);
+                    rhs1_ID[i,e] -= d1; rhs1_ID[j,e] += d1;
                 end
             end
         end
     end
-    return (-M_inv*rhs1_ES, -M_inv*rhs2_ES, -M_inv*rhs3_ES), (-M_inv*rhs1_ID, -M_inv*rhs2_ID, -M_inv*rhs3_ID)
+
+    rhs1_ID = rhs1_ID + f1_ID;
+    h_L_next = h -M_inv * rhs1_ID *dt;
+    h_L_next_f = E*h_L_next;
+    f1_IDf = E*f1_ID; f1_ESf = E*f1_ES;
+    lf = (h_L_next_f .-tol)./(Nq*M_inv[1:Nfq,1:Nfq]*(f1_ESf-f1_IDf)*dt);
+    lf = min.(lf, lf[mapP]); lf = min.(1, lf); lf = max.(lf,0);
+    for e = 1:size(h,2)
+        for i = 1:Nfq
+            if h_L_next_f[i,e]< tol || hf[i,e]< tol
+                lf[i,e] = 0;
+                lf[mapP[i,e]]=0;
+            end
+        end
+    end
+    lf = E'*lf;
+    # lf = zeros(size(h));
+
+    rhs1_CL = f1_ID + lf.*(f1_ES - f1_ID);
+    rhs2_CL = f2_ID + lf.*(f2_ES - f2_ID);
+    rhs3_CL = f3_ID + lf.*(f3_ES - f3_ID);
+
+    ##volume part
+    # loop over all elements
+    for e = 1:size(h,2)
+        rxJ_i = rxJ[1,e]; sxJ_i = sxJ[1,e];
+        ryJ_i = ryJ[1,e]; syJ_i = syJ[1,e];
+        vgeo_e = (rxJ_i, sxJ_i, ryJ_i, syJ_i);
+        b_e = btm[:,e];
+        for i=1:Nq
+            UL_E = (h[i,e], hu[i,e], hv[i,e]);
+            for j=i:Nq
+                UR_E = (h[j,e], hu[j,e], hv[j,e])
+                fv1_i_ES, fv2_i_ES, fv3_i_ES, fv1_j_ES, fv2_j_ES, fv3_j_ES = swe_2d_esdg_vol(UL_E, UR_E, ops, vgeo_e, i, j, b_e, g)
+
+                cij = C[i,j]
+                fv1_i_ID = 0; fv2_i_ID = 0; fv3_i_ID = 0;
+                fv1_j_ID = 0; fv2_j_ID = 0; fv3_j_ID = 0;
+                if C[i,j]!=0
+                    fv1_i_ID, fv2_i_ID, fv3_i_ID = swe_2d_ID_vol(UR_E, Qr_ID, Qs_ID, vgeo_e, i, j);
+                    fv1_j_ID, fv2_j_ID, fv3_j_ID = swe_2d_ID_vol(UL_E, Qr_ID, Qs_ID, vgeo_e, j, i);
+
+                    lambda_i = abs.(u[i,e].*C_x[i,j]+v[i,e].*C_y[i,j])+sqrt.(g.*h[i,e])
+                    lambda_j = abs.(u[j,e].*C_x[j,i]+v[j,e].*C_y[j,i])+sqrt.(g.*h[j,e])
+                    lambda = max(lambda_i, lambda_j)
+                    d1 = cij * lambda * (h[j,e]  - h[i,e]);
+                    d2 = cij * lambda * (hu[j,e] - hu[i,e]);
+                    d3 = cij * lambda * (hv[j,e] - hv[i,e]);
+                    fv1_i_ID -= d1
+                    fv2_i_ID -= d2
+                    fv3_i_ID -= d3
+                    fv1_j_ID += d1
+                    fv2_j_ID += d2
+                    fv3_j_ID += d3
+
+                end
+                l_ij = (h_L_next[i,e] -tol)/(Nq*M_inv[i,i]*(fv1_i_ES-fv1_i_ID)*dt);
+                l_ji = (h_L_next[j,e] -tol)/(Nq*M_inv[j,j]*(fv1_j_ES-fv1_j_ID)*dt);
+                l = min(l_ij, l_ij);
+                l = min(1, l);
+                # l = max(l,0);
+                if h_L_next[i,e]< tol || h_L_next[j,e]< tol || fv1_i_ES-fv1_i_ID < tol
+                    l = 0;
+                end
+                # l = 0;
+
+                rhs1_CL[i,e] += fv1_i_ID + l * (fv1_i_ES-fv1_i_ID);
+                rhs2_CL[i,e] += fv2_i_ID + l * (fv2_i_ES-fv2_i_ID);
+                rhs3_CL[i,e] += fv3_i_ID + l * (fv3_i_ES-fv3_i_ID);
+                if i!=j
+                    rhs1_CL[j,e] += fv1_j_ID + l * (fv1_j_ES-fv1_j_ID);
+                    rhs2_CL[j,e] += fv2_j_ID + l * (fv2_j_ES-fv2_j_ID);
+                    rhs3_CL[j,e] += fv3_j_ID + l * (fv3_j_ES-fv3_j_ID);
+                end
+            end
+        end
+    end
+    return -M_inv*rhs1_CL, -M_inv*rhs2_CL, -M_inv*rhs3_CL
 end
 
 
@@ -447,20 +553,19 @@ DT = zeros(MAXIT)
 t = 0
 t_plot = dT*10
 global i;
+@time begin
 for i = 1:MAXIT
-    if i%100 == 0
+    if i%1000 == 0
         @show i, t
     end
     global h, hu, hv, u, t, t_plot
 
     # Heun's method - this is an example of a 2nd order SSP RK method
-    local rhs_ES1, rhs_ID1 = swe_2d_rhs(u,ops,dis_cst,vgeo,fgeo,nodemaps)
+    # local rhs_ES1, rhs_ID1 = swe_2d_rhs(u,ops,dis_cst,vgeo,fgeo,nodemaps, dt1)
     lambda = maximum(sqrt.((hu./h).^2+(hv./h).^2)+sqrt.(g.*h))
-    dt1 = min(T-t, minimum(wq)*J[1]/(2*lambda), dT);
-    rhs_1, L1 = convex_limiter(rhs_ES1, rhs_ID1, h, h, tol, dt1)
-    # if dt1<dT
-    #     rhs_1 = rhs_ID1;
-    # end
+    dt1 = min(T-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
+    local rhs_1 = swe_2d_rhs(u,ops,dis_cst,vgeo,fgeo,nodemaps, dt1, tol)
+
     htmp  = h  + dt1*rhs_1[1]
     hutmp = hu + dt1*rhs_1[2]
     hvtmp = hv + dt1*rhs_1[3]
@@ -472,29 +577,25 @@ for i = 1:MAXIT
 
     h_min, pos = findmin(htmp)
     if h_min <= 0
-       @show L1
+       # @show L1
        error("htmp_min<0 ", h_min, pos, "iteration ", i )
     end
     lambda = maximum(sqrt.((hutmp./htmp).^2+(hvtmp./htmp).^2)+sqrt.(g.*htmp))
-    dt2 = min(T-t, minimum(wq)*J[1]/(2*lambda), dT);
+    dt2 = min(T-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
     while dt2<dt1
         dt1 = dt2
         htmp  = h  + dt1*rhs_1[1]
         hutmp = hu + dt1*rhs_1[2]
         hvtmp = hv + dt1*rhs_1[3]
         lambda = maximum(sqrt.((hutmp./htmp).^2+(hvtmp./htmp).^2)+sqrt.(g.*htmp))
-        dt2 = min(T-t, minimum(wq)*J[1]/(2*lambda), dT);
+        dt2 = min(T-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
+        # @show dt2
     end
-    utmp = (htmp, hutmp, hvtmp)
-    rhs_ES2, rhs_ID2 = swe_2d_rhs(utmp,ops,dis_cst,vgeo,fgeo,nodemaps)
+    utmp = (htmp, hutmp, hvtmp, btm, gQNxb, gQNyb)
+    rhs_2 = swe_2d_rhs(utmp,ops,dis_cst,vgeo,fgeo,nodemaps, dt2, tol)
     dt = min(dt1, dt2)
-    rhs_2, L2 = convex_limiter(rhs_ES2, rhs_ID2, htmp, h, tol, dt)
-    # rhsh_ES = rhsh_ES2; rhshu_ES = rhshu_ES2; rhsh_ID = rhsh_ID2; rhshu_ID = rhshu_ID2;
-    # dt = min(T-t, minimum(w)/(2*lambda), dT);
-    # if dt1<dT
-    #     rhs_2 = rhs_ID2;
-    # end
-    s1 = sum(h)+sum(hu)+sum(hv)
+
+    # s1 = sum(h)+sum(hu)+sum(hv)
     h  .+= .5*dt*(rhs_1[1] + rhs_2[1])
     hu .+= .5*dt*(rhs_1[2] + rhs_2[2])
     hv .+= .5*dt*(rhs_1[3] + rhs_2[3])
@@ -502,7 +603,7 @@ for i = 1:MAXIT
     hv[findall(x->x<2*tol, h)] .= 0
     # @show L2, h, dt
     h_min, pos = findmin(h)
-    s2 = sum(h)+sum(hu)+sum(hv)
+    # s2 = sum(h)+sum(hu)+sum(hv)
     # @show norm(s2-s1)
     # @show sum(rhs_1[1] + rhs_2[1])
     # @show sum(rhs_1[2] + rhs_2[2])
@@ -511,11 +612,11 @@ for i = 1:MAXIT
     # @show norm(rhs_1[2] + rhs_2[2])
     # @show norm(rhs_1[3] + rhs_2[3])
     if h_min <=0
-        @show L2
+        # @show L2
         @show maximum(hu./h)
         error("h_min<0 ", h_min, pos, "iteration ", i )
     end
-    u = (h,hu,hv)
+    u = (h,hu,hv, btm, gQNxb, gQNyb)
     t +=dt
     if t>=T
             break
@@ -527,6 +628,7 @@ for i = 1:MAXIT
         t_plot += dT*10;
         # println("Number of time steps $i out of $Nsteps")
     end
+end
 end
 DT = DT[1:findmin(DT)[2]-1];
 
