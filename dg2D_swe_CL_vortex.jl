@@ -15,17 +15,19 @@ using NodesAndModes.Tri
 using UnPack
 using StartUpDG
 using StartUpDG.ExplicitTimestepUtils
+include("vortex_test.jl")
 
-const g = 1.0
+g = 2.0
 "Approximation parameters"
 N   = 3 # The order of approximation
-K1D = 8
+K1D = 16
 CFL = 1/4
-T   = 0.5 # endtimeA
+T   = .5 # endtimeA
 MAXIT = 1000000
 
 ts_ft= 1/4
 global tol = 1e-8
+qnode_choice = "GL"; #"tri_diage" #"GQ" "GL" "tri_diage"
 
 function build_meshfree_sbp(rq,sq,wq,rf,sf,wf,nrJ,nsJ,α)
     # [-1,1,0], [-1,-1,sqrt(4/3)]
@@ -99,7 +101,7 @@ function build_meshfree_sbp(rq,sq,wq,rf,sf,wf,nrJ,nsJ,α)
     return Qr,Qs,E,Br,Bs,A
 end
 
-function init_reference_tri_sbp_GQ(N)
+function init_reference_tri_sbp_GQ(N, qnode_choice)
     include("SBP_quad_data.jl")
     # initialize a new reference element data struct
     rd = RefElemData()
@@ -122,7 +124,11 @@ function init_reference_tri_sbp_GQ(N)
     @pack! rd = V1
 
     #Nodes on faces, and face node coordinate
-    r1D, w1D = gauss_quad(0,0,N)
+    if qnode_choice == "GQ"
+        r1D, w1D = gauss_quad(0,0,N+1)
+    elseif qnode_choice == "GL" || qnode_choice == "tri_diage"
+        r1D, w1D = gauss_lobatto_quad(0,0,N+1)
+    end
     Nfp = length(r1D) # number of points per face
     e = ones(Nfp) # vector of all ones
     z = zeros(Nfp) # vector of all zeros
@@ -133,7 +139,16 @@ function init_reference_tri_sbp_GQ(N)
     nsJ = [-e; e; z]
     @pack! rd = rf,sf,wf,nrJ,nsJ
 
-    rq,sq,wq = GQ_SBP[N]
+    if qnode_choice == "GQ"
+        rq,sq,wq = GQ_SBP[N];
+    elseif qnode_choice == "GL"
+        rq,sq,wq = GL_SBP[N];
+    elseif qnode_choice == "tri_diage"
+        rq,sq,wq = Tri_diage[N];
+    end
+    # rq,sq,wq = GQ_SBP[N]
+    # rq,sq,wq = GL_SBP[N]
+    # rq,sq,wq = Tri_diage[N]
     Vq = Tri.vandermonde(N,rq,sq)/VDM
     M = Vq'*diagm(wq)*Vq
     Pq = M\(Vq'*diagm(wq))
@@ -157,14 +172,6 @@ function fS2D(UL,UR,g)
     hR,huR,hvR = UR
     uL,vL = (x->x./hL).((huL,hvL))
     uR,vR = (x->x./hR).((huR,hvR))
-    # for i = 1:size(hL,1)
-    #     if hL[i]<tol
-    #         hL[i] = 0;
-    #     end
-    #     if hR[i]<tol
-    #         hR[i] = 0;
-    #     end
-    # end
     fxS1 = @. avg(huL,huR)
     fxS2 = @. avg(huL,huR)*avg(uL,uR) + .5*g*hL*hR
     fxS3 = @. avg(huL,huR)*avg(vL,vR)
@@ -203,26 +210,14 @@ function ESDG_bottom(QNr_sbp, QNs_sbp,btm,vgeo,g)
     return gQNxb, gQNyb
 end
 
-function ID_WB(UL_E, UR_E, btm, i, j)
-    h_i, hu_i, hv_i = UL_E; h_j, hu_j, hv_j = UR_E;
-    b_i = btm[i]; b_j = btm[j];
-    h_ij = max(0,h_i+b_i-max(b_i,b_j));
-    hu_ij = hu_i*h_ij/h_i; hv_ij = hv_i*h_ij/h_i
-    U_i = (h_ij, hu_ij, hv_ij);
-
-    h_ji = max(0,h_j+b_j-max(b_i,b_j));
-    hu_ji = hu_j*h_ji/h_j; hv_ji = hv_j*h_ji/h_j
-    U_j = (h_ji, hu_ji, hv_ji);
-    return U_i, U_j
-end
-
 # Mesh related variables
-VX,VY,EToV = uniform_tri_mesh(K1D,K1D)
+VX,VY,EToV = uniform_tri_mesh(K1D,K1D);
+VX = VX*10;VY = VY*5;
 FToF = connect_mesh(EToV,tri_face_vertices())
 Nfaces,K = size(FToF)
 
 # Construct matrices on reference elements
-rd = init_reference_tri_sbp_GQ(N)
+rd = init_reference_tri_sbp_GQ(N, qnode_choice)
 @unpack r,s,rf,sf,wf,rq,sq,wq,nrJ,nsJ = rd
 @unpack VDM,V1,Vq,Vf,Dr,Ds,M,Pq,LIFT = rd
 
@@ -317,13 +312,13 @@ xq = Vq*x
 yq = Vq*y
 # btm = sin.(pi*xq) .+1;
 btm = @. 5*exp(-25*(xq^2+yq^2))
-# btm = btm*0;
-# h = xq*0 .+ 2  - btm;
-h = exp.(-25*((xq.+0.5).^2)) .+2 - btm;
-h[findall(x->x<tol, h)] .= tol;
+btm = btm*0;
+# h = xq*0 .+ 5  - btm;
+# h = exp.(-25*((xq.+0.5).^2)) .+2;
+# h[findall(x->x<tol, h)] .= tol;
 # h = xq*0 .+ 5 - btm;
 
-h0 = copy(h)
+# h0 = copy(h)
 
 # u = @. sin(pi*xq)*sin(pi*yq)
 # u = @. exp(-25*(xq^2+yq^2))
@@ -342,9 +337,12 @@ h0 = copy(h)
 # h[:,1:K1D] .= 1e-10; h[:,K1D+1:end] .= 1
 
 
-hu = h*0;
-hu[findall(x->x>2.001, h)] .= 1;
-hv = h*0;
+# hu = h*0;
+# hu[findall(x->x>2.001, h)] .= 1;
+# hv = h*0;
+h, u, v = SWE_vortex(xq,yq, 0);
+hu = h.*u; hv = h.*v;
+
 # u = (h, hu, hv)
 
 "pack arguments into tuples"
@@ -367,7 +365,6 @@ function swe_2d_esdg_surface(UL, UR, dU, Pf, c)
     fs1 = @. fxS1*nxJ + fyS1*nyJ;
     fs2 = @. fxS2*nxJ + fyS2*nyJ;
     fs3 = @. fxS3*nxJ + fyS3*nyJ;
-    # @show findmin(hf)
     tau = 1
     f1_ES =  Pf*(fs1 .- .5*tau*c.*(hP.-hf).*sJ);
     f2_ES =  Pf*(fs2 .- .5*tau*c.*(huP.-huf).*sJ);
@@ -683,6 +680,8 @@ for i = 1:MAXIT
 end
 end
 DT = DT[1:findmin(DT)[2]-1];
+
+SWE_2D_Error_quad_sbp(N, V, Pq, Pq*xq, Pq*yq, Pq*h, Pq*hu, Pq*hv, T);
 
 gr(aspect_ratio=1,legend=false,
    markerstrokewidth=0,markersize=2)

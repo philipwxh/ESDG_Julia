@@ -248,7 +248,9 @@ resu = zeros(size(x))
 tol = 1e-8
 t = 0
 @gif for i = 1:100000
-    @show i, t
+    if i%1000 == 0
+        @show i, t
+    end
     global h, hu, u, t
     # for INTRK = 1:5
     #     rhsh = rhs(u,ops,vgeo,fgeo,mapP)

@@ -23,7 +23,7 @@ global g = 1
 N   = 3 # The order of approximation
 K1D = 16
 CFL = 1/2
-T   = 0.1 # endtime
+T   = 0.5 # endtime
 MAXIT = 1000000
 
 avg(a,b) = .5*(a+b)
@@ -297,7 +297,9 @@ t = 0
 t_plot = dT*10
 global i;
 @gif for i = 1:MAXIT
-    @show i, t
+    if i%1000 == 0
+        @show i, t
+    end
     global h, hu, u, t, t_plot
     # for INTRK = 1:5
     #     rhsh = rhs(u,ops,vgeo,fgeo,mapP)
