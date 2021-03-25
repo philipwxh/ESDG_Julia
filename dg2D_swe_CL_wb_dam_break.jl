@@ -15,14 +15,15 @@ using NodesAndModes.Tri
 using UnPack
 using StartUpDG
 using StartUpDG.ExplicitTimestepUtils
+using LoopVectorization
 
 const g = 1.0
 "Approximation parameters"
 N   = 3 # The order of approximation
 K1D = 8
 CFL = 1/4
-T   = 2 # endtimeA
-MAXIT = 100#0000
+T   = 1.5 # endtimeA
+MAXIT = 1000#000
 
 ts_ft= 1/2
 const tol = 1e-8
@@ -357,13 +358,13 @@ function swe_2d_esdg_surface(UL, UR, dU, Pf, c)::Tuple{Array{Float64,2},Array{Fl
     dh, dhu, dhv = dU
     (hf, huf, hvf)=UL;
     (hP, huP, hvP)=UR;
-    fs1 = @. fxS1*nxJ + fyS1*nyJ;
-    fs2 = @. fxS2*nxJ + fyS2*nyJ;
-    fs3 = @. fxS3*nxJ + fyS3*nyJ;
+    fs1 = @avx @. fxS1*nxJ + fyS1*nyJ;
+    fs2 = @avx @. fxS2*nxJ + fyS2*nyJ;
+    fs3 = @avx @. fxS3*nxJ + fyS3*nyJ;
     tau = 1
-    f1_ES =  Pf*(fs1 .- .5*tau*c.*(hP.-hf).*sJ);
-    f2_ES =  Pf*(fs2 .- .5*tau*c.*(huP.-huf).*sJ);
-    f3_ES =  Pf*(fs3 .- .5*tau*c.*(hvP.-hvf).*sJ);
+    f1_ES =  @avx Pf*(fs1 .- .5*tau*c.*(hP.-hf).*sJ);
+    f2_ES =  @avx Pf*(fs2 .- .5*tau*c.*(huP.-huf).*sJ);
+    f3_ES =  @avx Pf*(fs3 .- .5*tau*c.*(hvP.-hvf).*sJ);
     return f1_ES, f2_ES, f3_ES
 end
 
@@ -397,16 +398,16 @@ function swe_2d_esdg_vol(UL_E, UR_E, ops, vgeo_e, i, j, btm, g)
 end
 
 function swe_2d_ID_surface(UL, UR, dU, Pf, c)::Tuple{Array{Float64,2},Array{Float64,2},Array{Float64,2}}
-    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
+    # (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
     (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
     dh, dhu, dhv = dU
-    fs1 = @. fxS1*nxJ + fyS1*nyJ;
-    fs2 = @. fxS2*nxJ + fyS2*nyJ;
-    fs3 = @. fxS3*nxJ + fyS3*nyJ;
+    fs1 = @avx @. fxS1*nxJ + fyS1*nyJ;
+    fs2 = @avx @. fxS2*nxJ + fyS2*nyJ;
+    fs3 = @avx @. fxS3*nxJ + fyS3*nyJ;
     tau = 1
-    f1_ID = Pf * (0.5*fs1 .- .5*tau*c.*dh.*sJ)
-    f2_ID = Pf * (0.5*fs2 .- .5*tau*c.*dhu.*sJ)
-    f3_ID = Pf * (0.5*fs3 .- .5*tau*c.*dhv.*sJ)
+    f1_ID = @avx Pf * (0.5*fs1 .- .5*tau*c.*dh.*sJ)
+    f2_ID = @avx Pf * (0.5*fs2 .- .5*tau*c.*dhu.*sJ)
+    f3_ID = @avx Pf * (0.5*fs3 .- .5*tau*c.*dhv.*sJ)
     # f1_ID = Pf * (0.5*fs1) - transpose(E)*(Cf.*c.*dh)
     # f2_ID = Pf * (0.5*fs2) - transpose(E)*(Cf.*c.*dhu)
     # f3_ID = Pf * (0.5*fs3) - transpose(E)*(Cf.*c.*dhv)
@@ -498,7 +499,7 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
     end
 
     rhs1_ID = rhs1_ID + f1_ID;
-    h_L_next = h -M_inv * rhs1_ID *dt;
+    h_L_next = h - M_inv * rhs1_ID *dt;
     h_L_next_f = E*h_L_next;
     f1_IDf = E*f1_ID; f1_ESf = E*f1_ES;
     lf = (h_L_next_f .-tol)./(Nq*M_inv[1:Nfq,1:Nfq]*(f1_ESf-f1_IDf)*dt);

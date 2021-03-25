@@ -21,8 +21,8 @@ const g = 1.0
 N   = 3 # The order of approximation
 K1D = 8
 CFL = 1/4
-T   = 1 # endtimeA
-MAXIT = 1000000
+T   = 1.5 # endtimeA
+MAXIT = 100000000
 
 ts_ft= 1/2
 const tol = 1e-8
@@ -257,10 +257,26 @@ mapM,mapP,mapB = build_node_maps((xf,yf),FToF)
 mapM = reshape(mapM,length(wf),K)
 global mapP = reshape(mapP,length(wf),K)
 
+BDx = ones(size(xf));BDy = ones(size(yf));DAMx = ones(size(yf));
+for i=1:size(xf,1)
+    for j = 1:size(xf,2)
+        if (abs(xf[i,j]-maximum(VX))< 1e-10 )|| (abs(xf[i,j]-minimum(VX)) < 1e-10)
+            BDx[i,j] = -1;
+        end
+        if (abs(yf[i,j]-maximum(VY))< 1e-10 )|| (abs(yf[i,j]-minimum(VY)) < 1e-10)
+            BDy[i,j] = -1;
+        end
+        if (abs(xf[i,j]-0)< 1e-10 ) && (abs(yf[i,j]) > 0.1)
+            DAMx[i,j] = -1;
+            mapP[i,j] = mapM[i,j];
+        end
+    end
+end
+
 # "Make periodic"
-LX,LY = (x->maximum(x)-minimum(x)).((VX,VY)) # find lengths of domain
-mapPB = build_periodic_boundary_maps(xf,yf,LX,LY,Nfaces*K,mapM,mapP,mapB)
-mapP[mapB] = mapPB
+# LX,LY = (x->maximum(x)-minimum(x)).((VX,VY)) # find lengths of domain
+# mapPB = build_periodic_boundary_maps(xf,yf,LX,LY,Nfaces*K,mapM,mapP,mapB)
+# mapP[mapB] = mapPB
 
 # "Geometric factors and surface normals"
 rxJ, sxJ, ryJ, syJ, J = geometric_factors(x, y, Dr, Ds)
@@ -310,34 +326,18 @@ xq = Vq*x
 yq = Vq*y
 # btm = sin.(pi*xq) .+1;
 btm = @. 5*exp(-25*(xq^2+yq^2))
-# btm = btm*0;
-# h = xq*0 .+ 5  - btm;
-h = exp.(-25*((xq.+0.5).^2)) .+2 - btm;
-h[findall(x->x<tol, h)] .= tol;
-# h = xq*0 .+ 5 - btm;
+btm = btm*0.0;
 
+h = 5.0*ones(Float64,size(xq))
+for i = 1:size(xq,2)
+    if minimum(xq[:,i])>0
+        h[:,i] .= tol;
+    end
+end
 h0 = copy(h)
 
-# u = @. sin(pi*xq)*sin(pi*yq)
-# u = @. exp(-25*(xq^2+yq^2))
-# u0 = u
-# h = @. exp(-25*( xq^2+yq^2))+2
-
-# h = ones(size(xq))
-# col_idx = zeros(convert(Int, size(h,2)/4) )
-# for i = 0:convert(Int,K1D/2)-1
-#     idx_start = convert(Int, K1D*K1D*2/4) + i*K1D*2 + convert(Int,K1D/2)
-#     col_idx[i*K1D+1:(i+1)*K1D] = idx_start+1:idx_start+convert(Int,K1D)
-# end
-# col_idx = convert.(Int, col_idx)
-# h[:,col_idx] .= 1e-10;# h[:,K1D+1:end] .= 1
-
-# h[:,1:K1D] .= 1e-10; h[:,K1D+1:end] .= 1
-
-
-hu = h*0;
-hu[findall(x->x>2.001, h)] .= 1;
-hv = h*0;
+hu = h*0.0;
+hv = h*0.0;
 # u = (h, hu, hv)
 
 "pack arguments into tuples"
@@ -347,13 +347,12 @@ ops = ( Qrskew_ID,Qsskew_ID, Qr_ID, Qs_ID,
 dis_cst = (Cf, C, C_x, C_y)
 vgeo = (rxJ,sxJ,ryJ,syJ,J)
 fgeo = (nxJ,nyJ,sJ, nx, ny)
-nodemaps = (mapP,mapB)
+nodemaps = (mapP,mapB, BDx, BDy, DAMx)
 (gQNxb, gQNyb) =  ESDG_bottom(QNr_sbp, QNs_sbp, btm, vgeo, g);
 u = (h, hu, hv, btm, gQNxb, gQNyb)
 
 
-function swe_2d_esdg_surface(UL, UR, dU, Pf, fgeo, c, g)::Tuple{Array{Float64,2},Array{Float64,2},Array{Float64,2}}
-    nxJ,nyJ,sJ,nx,ny = fgeo
+function swe_2d_esdg_surface(UL, UR, dU, Pf, c)::Tuple{Array{Float64,2},Array{Float64,2},Array{Float64,2}}
     (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
     dh, dhu, dhv = dU
     (hf, huf, hvf)=UL;
@@ -397,9 +396,8 @@ function swe_2d_esdg_vol(UL_E, UR_E, ops, vgeo_e, i, j, btm, g)
 
 end
 
-function swe_2d_ID_surface(UL, UR, dU, Pf, fgeo, c, g)::Tuple{Array{Float64,2},Array{Float64,2},Array{Float64,2}}
-    nxJ,nyJ,sJ,nx,ny = fgeo
-    # (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
+function swe_2d_ID_surface(UL, UR, dU, Pf, c)::Tuple{Array{Float64,2},Array{Float64,2},Array{Float64,2}}
+    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
     (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
     dh, dhu, dhv = dU
     fs1 = @. fxS1*nxJ + fyS1*nyJ;
@@ -451,12 +449,12 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
     Qr_ID,Qs_ID,Qrb_ID,Qsb_ID,Qr_ES,Qs_ES,QNr_sbp, QNs_sbp, E,M_inv,Pf= ops
     Cf, C, C_x, C_y = dis_cst
     rxJ,sxJ,ryJ,syJ,J = vgeo
-    # nxJ,nyJ,sJ,nx,ny = fgeo
-    (mapP,mapB) = nodemaps
+    nxJ,nyJ,sJ,nx,ny = fgeo
+    mapP,mapB, BDx, BDy, DAMx = nodemaps
     u = hu./h; v = hv./h
     uf = E*u; vf = E*v
     hf  = E*h; huf = E*hu; hvf = E*hv
-    hP  = hf[mapP]; huP = huf[mapP] ;hvP = hvf[mapP]
+    hP  = hf[mapP]; huP = huf[mapP].*BDx.*DAMx;hvP = hvf[mapP].*BDy;
     dh  = hP-hf; dhu = huP-huf; dhv = hvP-hvf
     dU = (dh, dhu, dhv);
     UL = (hf, huf, hvf); UR = (hP, huP, hvP)
@@ -466,10 +464,10 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
 
     ##surface part
     #ES part
-    f1_ES, f2_ES, f3_ES = swe_2d_esdg_surface(UL, UR, dU, Pf, fgeo, c, g);
+    f1_ES, f2_ES, f3_ES = swe_2d_esdg_surface(UL, UR, dU, Pf, c);
     # @show norm(f1_ES_f - f1_ES), norm(f2_ES_f - f2_ES), norm(f3_ES_f - f3_ES)
     #ID part
-    f1_ID, f2_ID, f3_ID = swe_2d_ID_surface(UL, UR, dU, Pf, fgeo, c, g);
+    f1_ID, f2_ID, f3_ID = swe_2d_ID_surface(UL, UR, dU, Pf, c);
     # f1_ID, f2_ID, f3_ID = swe_2d_esdg_surface(UL, UR, dU, Pf, c);
 
     rhs1_ID = zeros(Float64, size(h));
@@ -508,12 +506,12 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
     for e = 1:size(h,2)
         for i = 1:Nfq
             if h_L_next_f[i,e]< tol || hf[i,e]< tol
-                lf[i,e] = 0.0;
-                lf[mapP[i,e]]=0.0;
+                lf[i,e] = 0;
+                lf[mapP[i,e]]=0;
             end
         end
     end
-    lf = min.(lf, lf[mapP]); lf = min.(1.0, lf); lf = max.(lf,0.0);
+    lf = min.(lf, lf[mapP]); lf = min.(1, lf); lf = max.(lf,0);
     lf = E'*lf;
     # lf = zeros(size(h));
     # lf = ones(size(lf));
@@ -528,6 +526,7 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
         ryJ_i = ryJ[1,e]; syJ_i = syJ[1,e];
         vgeo_e = (rxJ_i, sxJ_i, ryJ_i, syJ_i);
         b_e = btm[:,e];
+        l_e = 1.0;
         for i=1:Nq
             UL_E = (h[i,e], hu[i,e], hv[i,e]);
             for j=i:Nq
@@ -564,6 +563,7 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
                     fv2_j_ID += d2
                     fv3_j_ID += d3
                 end
+
                 l_ij = (h_L_next[i,e] -tol)/(Nq*M_inv[i,i]*(fv1_i_ES-fv1_i_ID)*dt);
                 if fv1_i_ES-fv1_i_ID<tol
                     l_ij = 1.0
@@ -576,18 +576,66 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
                 l = min(1.0,l);
                 l = max(l,0.0);
 
-                if h[i,e] < tol || h[j,e] < tol || h_L_next[i,e]< tol || h_L_next[j,e]< tol #|| fv1_ES-fv1_i_ID < tol
+                if (h[i,e] < tol) || (h[j,e] < tol) || (h_L_next[i,e]< tol) || (h_L_next[j,e]< tol) #|| fv1_ES-fv1_i_ID < tol
                     l = 0.0;
                 end
 
-                # l = 0.0;
-                rhs1_CL[i,e] += fv1_i_ID + l * (fv1_i_ES-fv1_i_ID);
-                rhs2_CL[i,e] += fv2_i_ID + l * (fv2_i_ES-fv2_i_ID);
-                rhs3_CL[i,e] += fv3_i_ID + l * (fv3_i_ES-fv3_i_ID);
+                l_e = min(l,l_e)
+                # l_e = 0
+                if l_e < tol
+                    l_e = 0.0;
+                    break
+                end
+            end
+            if l_e < tol
+                l_e = 0.0;
+                break
+            end
+        end
+        for i=1:Nq
+            UL_E = (h[i,e], hu[i,e], hv[i,e]);
+            for j=i:Nq
+                UR_E = (h[j,e], hu[j,e], hv[j,e])
+                fv1_i_ES, fv2_i_ES, fv3_i_ES, fv1_j_ES, fv2_j_ES, fv3_j_ES = swe_2d_esdg_vol(UL_E, UR_E, ops, vgeo_e, i, j, b_e, g)
+
+                cij = C[i,j]
+                fv1_i_ID = 0.0; fv2_i_ID = 0.0; fv3_i_ID = 0.0;
+                fv1_j_ID = 0.0; fv2_j_ID = 0.0; fv3_j_ID = 0.0;
+                if C[i,j]!=0 || i == j
+                    fv1_i_ID, fv2_i_ID, fv3_i_ID = swe_2d_ID_vol(UR_E, ops, vgeo_e, i, j, btm, g);
+                    fv1_j_ID, fv2_j_ID, fv3_j_ID = swe_2d_ID_vol(UL_E, ops, vgeo_e, j, i, btm, g);
+
+                    # fv1_i_ID, fv2_i_ID, fv3_i_ID = swe_2d_ID_vol(UR_E, Qr_ID, Qs_ID, vgeo_e, i, j);
+                    # fv1_j_ID, fv2_j_ID, fv3_j_ID = swe_2d_ID_vol(UL_E, Qr_ID, Qs_ID, vgeo_e, j, i);
+                    lambda_i = abs(u[i,e]*C_x[i,j]+v[i,e]*C_y[i,j])+sqrt(g*h[i,e])
+                    lambda_j = abs(u[j,e]*C_x[j,i]+v[j,e]*C_y[j,i])+sqrt(g*h[j,e])
+                    lambda = max(lambda_i, lambda_j)
+                    # d1 = 0; d2 = 0; d3 = 0
+                    # if h[i,e]>tol &&  h[i,e]>tol
+                    # d1 = cij * lambda * (h[j,e] + b_e[j]  - h[i,e] - b_e[i]);
+                    d1 = cij * lambda * (h[j,e] - h[i,e]);
+                    # if h[i,e]<=tol ||  h[j,e]<=tol
+                    #     d1 = 0;
+                    # end
+                    # d1 = 0;
+                    d2 = cij * lambda * (hu[j,e] - hu[i,e]);
+                    d3 = cij * lambda * (hv[j,e] - hv[i,e]);
+                    # end
+                    fv1_i_ID -= d1
+                    fv2_i_ID -= d2
+                    fv3_i_ID -= d3
+                    fv1_j_ID += d1
+                    fv2_j_ID += d2
+                    fv3_j_ID += d3
+                end
+
+                rhs1_CL[i,e] += fv1_i_ID + l_e * (fv1_i_ES-fv1_i_ID);
+                rhs2_CL[i,e] += fv2_i_ID + l_e * (fv2_i_ES-fv2_i_ID);
+                rhs3_CL[i,e] += fv3_i_ID + l_e * (fv3_i_ES-fv3_i_ID);
                 if i!= j
-                    rhs1_CL[j,e] += fv1_j_ID + l * (fv1_j_ES-fv1_j_ID);
-                    rhs2_CL[j,e] += fv2_j_ID + l * (fv2_j_ES-fv2_j_ID);
-                    rhs3_CL[j,e] += fv3_j_ID + l * (fv3_j_ES-fv3_j_ID);
+                    rhs1_CL[j,e] += fv1_j_ID + l_e * (fv1_j_ES-fv1_j_ID);
+                    rhs2_CL[j,e] += fv2_j_ID + l_e * (fv2_j_ES-fv2_j_ID);
+                    rhs3_CL[j,e] += fv3_j_ID + l_e * (fv3_j_ES-fv3_j_ID);
                 end
             end
         end
@@ -685,4 +733,5 @@ gr(aspect_ratio=1,legend=false,
 rp, sp = equi_nodes(10)
 Vp = vandermonde(N,rp,sp)/vandermonde(N,r,s)
 vv = Vp*Pq*h
-Plots.scatter(Vp*x,Vp*y,vv,zcolor=vv,camera=(0,90))
+# Plots.scatter(Vp*x,Vp*y,vv,zcolor=vv,camera=(0,90))
+Plots.scatter(Vp*x,Vp*y,vv,zcolor=vv,camera=(45,45))
