@@ -5,16 +5,14 @@ using ForwardDiff
 using SparseArrays
 using StaticArrays
 push!(LOAD_PATH, "./src") # user defined modules
-# using CommonUtils
-# using Basis1D
 using Basis2DTri
-# using SetupDG
-# using UniformTriMesh
 using NodesAndModes
 using NodesAndModes.Tri
 using UnPack
 using StartUpDG
 using StartUpDG.ExplicitTimestepUtils
+include("dg2d_swe_flux.jl")
+include("dg2d_swe_mesh_opt.jl")
 
 const g = 1.0
 "Approximation parameters"
@@ -24,190 +22,9 @@ CFL = 1/4
 T   = 1.5 # endtimeA
 MAXIT = 100000000
 
-ts_ft= 1/2
+ts_ft= 1/8
 const tol = 1e-8
 qnode_choice = "GQ" #"GQ" "GL" "tri_diage"
-
-function build_meshfree_sbp(rq,sq,wq,rf,sf,wf,nrJ,nsJ,α)
-    # [-1,1,0], [-1,-1,sqrt(4/3)]
-    equilateral_map(r,s) = (@. .5*(2*r+1*s+1), @. sqrt(3)*(1+s)/2 - 1/sqrt(3) )
-    req,seq = equilateral_map(rq,sq)
-    ref,sef = equilateral_map(rf,sf)
-    barycentric_coords(r,s) = ((@. (1+r)/2), (@. (1+s)/2), (@. -(r+s)/2))
-    λ1,λ2,λ3 = barycentric_coords(rq,sq)
-    λ1f,λ2f,λ3f = barycentric_coords(rf,sf)
-
-    Br = diagm(nrJ.*wf)
-    Bs = diagm(nsJ.*wf)
-
-    # build extrapolation matrix
-    E = zeros(length(rf),length(rq))
-    for i = 1:length(rf)
-        # d = @. (λ1 - λ1f[i])^2 + (λ2 - λ2f[i])^2 + (λ3 - λ3f[i])^2
-        d2 = @. (req-ref[i])^2 + (seq-sef[i])^2
-        p = sortperm(d2)
-        h2 = (wf[i]/sum(wf))*2/pi # set so that h = radius of circle with area w_i = face weight
-        nnbrs = min(4,max(3,count(d2[p] .< h2))) # find 3 closest points
-        p = p[1:nnbrs]
-        Ei = vandermonde_2D(1,[rf[i]],[sf[i]])/vandermonde_2D(1,rq[p],sq[p])
-        E[i,p] = Ei
-    end
-    E = Matrix(droptol!(sparse(E),1e-13))
-
-    # build stencil
-    A = spzeros(length(req),length(req))
-    for i = 1:length(req)
-        d2 = @. (req-req[i])^2 + (seq-seq[i])^2
-        p = sortperm(d2)
-
-        # h^2 = wq[i]/pi = radius of circle with area wq[i]
-        # h2 =     (sqrt(3)/sum(wq))*wq[i]/pi
-        h2 = α^2*(sqrt(3)/sum(wq))*wq[i]/pi
-
-        nnbrs = count(d2[p] .< h2)
-        nbrs = p[1:nnbrs]
-        A[i,nbrs] .= one(eltype(A))
-    end
-    A = (A+A')
-    A.nzval .= one(eltype(A)) # bool-ish
-
-    # build graph Laplacian
-    L1 = (A-diagm(diag(A))) # ignore
-    L1 -= diagm(vec(sum(L1,dims=2)))
-
-    b1r = -sum(.5*E'*Br*E,dims=2)
-    b1s = -sum(.5*E'*Bs*E,dims=2)
-    ψ1r = pinv(L1)*b1r
-    ψ1s = pinv(L1)*b1s
-
-    function fillQ(adj,ψ)
-        Np = length(ψ)
-        S = zeros(Np,Np)
-        for i = 1:Np
-            for j = 1:Np
-                if adj[i,j] != 0
-                        S[i,j] += (ψ[j]-ψ[i])
-                end
-            end
-        end
-        return S
-    end
-
-    S1r,S1s = fillQ.((A,A),(ψ1r,ψ1s))
-    Qr = Matrix(droptol!(sparse(S1r + .5*E'*Br*E),1e-14))
-    Qs = Matrix(droptol!(sparse(S1s + .5*E'*Bs*E),1e-14))
-
-    return Qr,Qs,E,Br,Bs,A
-end
-
-function init_reference_tri_sbp_GQ(N, qnode_choice)
-    include("SBP_quad_data.jl")
-    # initialize a new reference element data struct
-    rd = RefElemData()
-
-    fv = tri_face_vertices() # set faces for triangle
-    Nfaces = length(fv)
-    @pack! rd = fv, Nfaces
-
-    # Construct matrices on reference elements
-    r, s = Tri.nodes(N)
-    VDM = Tri.vandermonde(N, r, s)
-    Vr, Vs = Tri.grad_vandermonde(N, r, s)
-    Dr = Vr/VDM
-    Ds = Vs/VDM
-    @pack! rd = r,s,VDM,Dr,Ds
-
-    # low order interpolation nodes
-    r1,s1 = Tri.nodes(1)
-    V1 = Tri.vandermonde(1,r,s)/Tri.vandermonde(1,r1,s1)
-    @pack! rd = V1
-
-    #Nodes on faces, and face node coordinate
-    if qnode_choice == "GQ"
-        r1D, w1D = gauss_quad(0,0,N)
-    elseif qnode_choice == "GL" || qnode_choice == "tri_diage"
-        r1D, w1D = gauss_lobatto_quad(0,0,N+1)
-    end
-    Nfp = length(r1D) # number of points per face
-    e = ones(Nfp) # vector of all ones
-    z = zeros(Nfp) # vector of all zeros
-    rf = [r1D; -r1D; -e];
-    sf = [-e; r1D; -r1D];
-    wf = vec(repeat(w1D,3,1));
-    nrJ = [z; e; -e]
-    nsJ = [-e; e; z]
-    @pack! rd = rf,sf,wf,nrJ,nsJ
-
-    if qnode_choice == "GQ"
-        rq,sq,wq = GQ_SBP[N];
-    elseif qnode_choice == "GL"
-        rq,sq,wq = GL_SBP[N];
-    elseif qnode_choice == "tri_diage"
-        rq,sq,wq = Tri_diage[N];
-    end
-    # rq,sq,wq = GQ_SBP[N]
-    # rq,sq,wq = GL_SBP[N]
-    # rq,sq,wq = Tri_diage[N]
-    Vq = Tri.vandermonde(N,rq,sq)/VDM
-    M = Vq'*diagm(wq)*Vq
-    Pq = M\(Vq'*diagm(wq))
-    @pack! rd = rq,sq,wq,Vq,M,Pq
-
-    Vf = Tri.vandermonde(N,rf,sf)/VDM # interpolates from nodes to face nodes
-    LIFT = M\(Vf'*diagm(wf)) # lift matrix used in rhs evaluation
-    @pack! rd = Vf,LIFT
-
-    # plotting nodes
-    rp, sp = Tri.equi_nodes(10)
-    Vp = Tri.vandermonde(N,rp,sp)/VDM
-    @pack! rd = rp,sp,Vp
-
-    return rd
-end
-
-avg(a,b) = .5*(a+b)
-function fS2D(UL,UR,g)
-    hL,huL,hvL = UL
-    hR,huR,hvR = UR
-    uL,vL = (x->x./hL).((huL,hvL))
-    uR,vR = (x->x./hR).((huR,hvR))
-    fxS1 = @. avg(huL,huR)
-    fxS2 = @. avg(huL,huR)*avg(uL,uR) + .5*g*hL*hR
-    fxS3 = @. avg(huL,huR)*avg(vL,vR)
-
-    fyS1 = @. avg(hvL,hvR)
-    fyS2 = @. avg(hvL,hvR)*avg(uL,uR)
-    fyS3 = @. avg(hvL,hvR)*avg(vL,vR) + .5*g*hL*hR
-    return (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3)
-end
-
-function fS2D_LF(UL,UR,g)
-    hL,huL,hvL = UL
-    hR,huR,hvR = UR
-    uL,vL = (x->x./hL).((huL,hvL))
-    uR,vR = (x->x./hR).((huR,hvR))
-    fxS1 = @. avg(huL,huR)
-    fxS2 = @. avg(huL*uL,huR*uR) + .5*g*avg(hL*hL,hR*hR)
-    fxS3 = @. avg(huL*vL,huR*vR)
-
-    fyS1 = @. avg(hvL,hvR)
-    fyS2 = @. avg(hvL*uL,hvR*uR)
-    fyS3 = @. avg(hvL*uL,hvR*vR) + .5*g*avg(hL*hL,hR*hR)
-    return (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3)
-end
-
-function ESDG_bottom(QNr_sbp, QNs_sbp,btm,vgeo,g)
-    rxJ,sxJ,ryJ,syJ,J = vgeo
-    gQNxb = zeros(size(btm))
-    gQNyb = zeros(size(btm))
-    for e = 1:size(h,2)
-        QNx = 1/2*( diagm(rxJ[:,e])*QNr_sbp + QNr_sbp*diagm(rxJ[:,e]) + diagm(sxJ[:,e])*QNs_sbp + QNs_sbp*diagm(sxJ[:,e]) );
-        QNy = 1/2*( diagm(ryJ[:,e])*QNr_sbp + QNr_sbp*diagm(ryJ[:,e]) + diagm(syJ[:,e])*QNs_sbp + QNs_sbp*diagm(syJ[:,e]) );
-        gQNxb[:,e] += g*QNx*btm[:,e];
-        gQNxb[:,e] += g*QNy*btm[:,e];
-    end
-    return gQNxb, gQNyb
-end
 
 # Mesh related variables
 VX,VY,EToV = uniform_tri_mesh(K1D,K1D)
@@ -351,98 +168,6 @@ nodemaps = (mapP,mapB, BDx, BDy, DAMx)
 (gQNxb, gQNyb) =  ESDG_bottom(QNr_sbp, QNs_sbp, btm, vgeo, g);
 u = (h, hu, hv, btm, gQNxb, gQNyb)
 
-
-function swe_2d_esdg_surface(UL, UR, dU, Pf, c)::Tuple{Array{Float64,2},Array{Float64,2},Array{Float64,2}}
-    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
-    dh, dhu, dhv = dU
-    (hf, huf, hvf)=UL;
-    (hP, huP, hvP)=UR;
-    fs1 = @. fxS1*nxJ + fyS1*nyJ;
-    fs2 = @. fxS2*nxJ + fyS2*nyJ;
-    fs3 = @. fxS3*nxJ + fyS3*nyJ;
-    tau = 1
-    f1_ES =  Pf*(fs1 .- .5*tau*c.*(hP.-hf).*sJ);
-    f2_ES =  Pf*(fs2 .- .5*tau*c.*(huP.-huf).*sJ);
-    f3_ES =  Pf*(fs3 .- .5*tau*c.*(hvP.-hvf).*sJ);
-    return f1_ES, f2_ES, f3_ES
-end
-
-function swe_2d_esdg_vol(UL_E, UR_E, ops, vgeo_e, i, j, btm, g)
-    Qr_ID,Qs_ID,Qrb_ID,Qsb_ID,Qr_ES,Qs_ES,QNr_sbp, QNs_sbp, E,M_inv,Pf= ops
-    (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
-    (FxV1,FxV2,FxV3),(FyV1,FyV2,FyV3) = fS2D(UL_E,UR_E,g)
-    h_i, hu_i, hv_i = UL_E; h_j, hu_j, hv_j = UR_E;
-    # QNx_ij = Qr_ES[i,j]*(rxJ[i,e]+ rxJ[j,e]) + Qs_ES[i,j]*(sxJ[i,e]+ sxJ[j,e]);
-    # QNy_ij = Qr_ES[i,j]*(ryJ[i,e]+ ryJ[j,e]) + Qs_ES[i,j]*(syJ[i,e]+ syJ[j,e]);
-    QNx_ij = Qr_ES[i,j]*(rxJ_i*2) + Qs_ES[i,j]*(sxJ_i*2);
-    QNy_ij = Qr_ES[i,j]*(ryJ_i*2) + Qs_ES[i,j]*(syJ_i*2);
-
-    QNxb_ij = QNr_sbp[i,j]*(rxJ_i) + QNs_sbp[i,j]*(sxJ_i);
-    QNyb_ij = QNr_sbp[i,j]*(ryJ_i) + QNs_sbp[i,j]*(syJ_i);
-
-    fv1_ES = (QNx_ij*FxV1 + QNy_ij*FyV1);
-    # fv2_ES = (QNx_ij*FxV2 + QNy_ij*FyV2);
-    # fv3_ES = (QNx_ij*FxV3 + QNy_ij*FyV3);
-
-    fv2_i_ES = (QNx_ij*FxV2 + QNy_ij*FyV2);
-    fv3_i_ES = (QNx_ij*FxV3 + QNy_ij*FyV3);
-    fv2_j_ES = -(QNx_ij*FxV2 + QNy_ij*FyV2);
-    fv3_j_ES = -(QNx_ij*FxV3 + QNy_ij*FyV3);
-    fv2_i_ES = (QNx_ij*FxV2 + QNy_ij*FyV2) + g*h_i*QNxb_ij*btm[j];
-    fv3_i_ES = (QNx_ij*FxV3 + QNy_ij*FyV3) + g*h_i*QNyb_ij*btm[j];
-    fv2_j_ES = -(QNx_ij*FxV2 + QNy_ij*FyV2) - g*h_j*QNxb_ij*btm[i];
-    fv3_j_ES = -(QNx_ij*FxV3 + QNy_ij*FyV3) - g*h_j*QNyb_ij*btm[i];
-    return fv1_ES, fv2_i_ES, fv3_i_ES, -fv1_ES, fv2_j_ES, fv3_j_ES
-
-end
-
-function swe_2d_ID_surface(UL, UR, dU, Pf, c)::Tuple{Array{Float64,2},Array{Float64,2},Array{Float64,2}}
-    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
-    (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D(UL,UR,g)
-    dh, dhu, dhv = dU
-    fs1 = @. fxS1*nxJ + fyS1*nyJ;
-    fs2 = @. fxS2*nxJ + fyS2*nyJ;
-    fs3 = @. fxS3*nxJ + fyS3*nyJ;
-    tau = 1
-    f1_ID = Pf * (0.5*fs1 .- .5*tau*c.*dh.*sJ)
-    f2_ID = Pf * (0.5*fs2 .- .5*tau*c.*dhu.*sJ)
-    f3_ID = Pf * (0.5*fs3 .- .5*tau*c.*dhv.*sJ)
-    # f1_ID = Pf * (0.5*fs1) - transpose(E)*(Cf.*c.*dh)
-    # f2_ID = Pf * (0.5*fs2) - transpose(E)*(Cf.*c.*dhu)
-    # f3_ID = Pf * (0.5*fs3) - transpose(E)*(Cf.*c.*dhv)
-    return f1_ID, f2_ID, f3_ID
-end
-
-function swe_2d_ID_vol(UL_E, ops, vgeo_e, i, j, btm, g)
-    Qr_ID,Qs_ID,Qrb_ID,Qsb_ID,Qr_ES,Qs_ES,QNr_sbp, QNs_sbp, E,M_inv,Pf= ops
-    (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
-    # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
-    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D(UL_E,UL_E,g)
-    h_i, hu_i, hv_i = UL_E;
-
-    QNx_ij = Qr_ID[i,j]*rxJ_i + Qs_ID[i,j]*sxJ_i;
-    QNy_ij = Qr_ID[i,j]*ryJ_i + Qs_ID[i,j]*syJ_i;
-
-    QNxb_ij = Qrb_ID[i,j]*rxJ_i + Qsb_ID[i,j]*sxJ_i;
-    QNyb_ij = Qrb_ID[i,j]*ryJ_i + Qsb_ID[i,j]*syJ_i;
-
-    fv1_ID = QNx_ij*fxV1 + QNy_ij*fyV1;
-    fv2_ID = QNx_ij*fxV2 + QNy_ij*fyV2 + g*h_i*QNxb_ij*btm[j];
-    fv3_ID = QNx_ij*fxV3 + QNy_ij*fyV3 + g*h_i*QNyb_ij*btm[j];
-    return fv1_ID, fv2_ID, fv3_ID
-end
-
-function swe_2d_ID_h(UL_E, Qr_ID, Qs_ID, vgeo_e, i, j, g)
-    (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
-    # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
-    (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D(UL_E,UL_E,g)
-    Qr_ID_ij = Qr_ID[i,j]; Qs_ID_ij = Qs_ID[i,j];
-    dhdx  = rxJ_i*(Qr_ID_ij*fxV1) + sxJ_i*(Qs_ID_ij*fxV1)
-    dhdy  = ryJ_i*(Qr_ID_ij*fyV1) + syJ_i*(Qs_ID_ij*fyV1)
-    fv1_ID = dhdx  + dhdy
-    return fv1_ID
-end
-
 function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
     # unpack args
     h, hu, hv, btm, gQNxb, gQNyb  = U
@@ -464,10 +189,10 @@ function swe_2d_rhs(U,ops,dis_cst,vgeo,fgeo,nodemaps, dt, tol, g)
 
     ##surface part
     #ES part
-    f1_ES, f2_ES, f3_ES = swe_2d_esdg_surface(UL, UR, dU, Pf, c);
+    f1_ES, f2_ES, f3_ES = swe_2d_esdg_surface(UL, UR, dU, Pf, fgeo, c, g);
     # @show norm(f1_ES_f - f1_ES), norm(f2_ES_f - f2_ES), norm(f3_ES_f - f3_ES)
     #ID part
-    f1_ID, f2_ID, f3_ID = swe_2d_ID_surface(UL, UR, dU, Pf, c);
+    f1_ID, f2_ID, f3_ID = swe_2d_ID_surface(UL, UR, dU, Pf, fgeo, c, g);
     # f1_ID, f2_ID, f3_ID = swe_2d_esdg_surface(UL, UR, dU, Pf, c);
 
     rhs1_ID = zeros(Float64, size(h));
