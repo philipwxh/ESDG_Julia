@@ -64,7 +64,7 @@ function swe_1d_esdg_surface(UL, UR, dU, E, nxJ, c, g)::Tuple{Array{Float64,2},A
     return f1_ES, f2_ES
 end
 
-function swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, btm, g)
+function swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, btm, g)::Tuple{Float64,Float64,Float64,Float64}
     Q_ID, Qb_ID, Q_ES, Qb_ES, E, M_inv, Mf_inv = ops
     rxJ,J = vgeo
     (FxV1,FxV2)= fS1D(UL_E,UR_E,g)
@@ -91,7 +91,7 @@ function swe_1d_ID_surface(UL, UR, dU, E, nxJ, c, g)::Tuple{Array{Float64,2},Arr
     return f1_ID, f2_ID
 end
 
-function swe_1d_ID_vol(UL_E, ops, vgeo, i, j, btm, g)
+function swe_1d_ID_vol(UL_E, ops, vgeo, i, j, btm, g)::Tuple{Float64,Float64}
     Q_ID, Qb_ID, Q_ES, Qb_ES, E, M_inv, Mf_inv = ops
     rxJ,J = vgeo
     # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
@@ -105,7 +105,7 @@ function swe_1d_ID_vol(UL_E, ops, vgeo, i, j, btm, g)
     return fv1_ID, fv2_ID
 end
 
-function swe_1d_ID_h(UL_E, Q_ID, i, j, g)
+function swe_1d_ID_h(UL_E, Q_ID, i, j, g)::Float64
     # (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
     # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
     (fxV1,fxV2) = fS1D(UL_E,UL_E,g)

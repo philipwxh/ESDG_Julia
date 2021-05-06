@@ -22,75 +22,13 @@ include("dg1d_swe_flux.jl")
 global g = 1
 "Approximation parameters"
 N   = 3 # The order of approximation
-K1D = 200
+K1D = 32
 CFL = 1/4
 T   = 1 # endtime
-MAXIT = 1000000
+MAXIT = 100#0000
 tol = 1e-16
 t_plot = [T];
 global ts_ft = 2;
-
-function make_meshfree_ops(r,w)
-        # p = 1
-        EL = [vandermonde_1D(1,[-1])/vandermonde_1D(1,r[1:2]) zeros(1,N-1)]
-        ER = [zeros(1,N-1) vandermonde_1D(1,[1])/vandermonde_1D(1,r[end-1:end])]
-        E  = [EL;ER]
-
-        # # using p=2 extrapolation
-        # EL = [vandermonde_1D(2,[-1])/vandermonde_1D(2,r[1:3]) zeros(1,N-2)]
-        # ER = [zeros(1,N-2) vandermonde_1D(2,[1])/vandermonde_1D(2,r[end-2:end])]
-        # E  = [EL;ER]
-
-        B = diagm([-1,1])
-
-        S = diagm(1=>ones(N),-1=>ones(N))
-        # S[1,3] = 1
-        # S[end,end-2] = 1
-        # S = one.(S)
-        adj = sparse(triu(S)-triu(S)')
-        # @show S
-        # @show adj
-        function build_weighted_graph_laplacian(adj,r,p)
-                Np = length(r)
-                L  = zeros(Np,Np)
-                for i = 1:Np
-                        for j = 1:Np
-                                if adj[i,j] != 0
-                                        L[i,j] += @. (.5*(r[i]+r[j]))^p
-                                end
-                        end
-                        L[i,i] = -sum(L[i,:])
-                end
-                return L
-        end
-
-        # constant exactness
-        L = build_weighted_graph_laplacian(adj,r,0)
-        @show L
-        b1 = zeros(N+1) - .5*sum(E'*B*E,dims=2)
-        ψ1 = pinv(L)*b1
-
-        ψx = pinv(L)*(w - .5*E'*B*E*r)
-
-        function fillQ(adj,ψ,r,p)
-                Np = length(ψ)
-                Q = zeros(Np,Np)
-                for i = 1:Np
-                        for j = 1:Np
-                                if adj[i,j] != 0
-                                        Q[i,j] += (ψ[j]-ψ[i])*r[j]^p #(ψ[j]-ψ[i])*(.5*(r[i]+r[j]))^p
-                                end
-                        end
-                end
-                return Q
-        end
-
-        S1 = fillQ(adj,ψ1,r,0)
-        Q = S1 + .5*E'*B*E # first order accuracy
-        # S1 = fillQ(adj,ψx,r,0)
-        # Q = S1 + .5*E'*B*E # first order accuracy
-        return Q,E,B,ψ1
-end
 
 "Mesh related variables"
 VX = LinRange(-5,5,K1D+1)
@@ -164,20 +102,20 @@ vgeo = (rxJ,J)
 fgeo = (nxJ)
 nodemaps = (mapM, mapP)
 
-function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
+function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g, tol)
     # h, hu = U
     Q_ID, Qb_ID, Q_ES, Qb_ES, E, M_inv, Mf_inv = ops
     rxJ,J = vgeo
     nxJ = fgeo
 
     u = hu./h;
-    hf = Vf*h; hP = hf[mapP]; dh = hP-hf;
-    huf = Vf*hu; huP = huf[mapP]; dhu = huP - huf;
-    uf = Vf*u; uP = uf[mapP]; du = uP - uf;
+    hf = E*h; hP = hf[mapP]; dh = hP-hf;
+    huf = E*hu; huP = huf[mapP]; dhu = huP - huf;
+    uf = E*u; uP = uf[mapP]; du = uP - uf;
     UL = (hf, huf); UR = (hP, huP); dU = (dh, dhu);
 
-    lambda = abs.(u)+sqrt.(g.*h)
-    lambdaM = Vf*lambda
+    lambdaC = abs.(u)+sqrt.(g*h)
+    lambdaM = E*lambdaC
     lambdaP = lambdaM[mapP]
     c = max.(lambdaM, lambdaP)
     tau = 1
@@ -207,8 +145,8 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
                     rhs1_ID[i,e] += fv1_i_ID; rhs1_ID[j,e] += fv1_j_ID;
                     lambda_i = abs(u[i,e]*cij)+sqrt(g*h[i,e])
                     lambda_j = abs(u[j,e]*cij)+sqrt(g*h[j,e])
-                    lambda = max(lambda_i, lambda_j)
-                    d1 = cij * ts_ft*lambda * (h[j,e]  - h[i,e]);
+                    lambda_ij = max(lambda_i, lambda_j)
+                    d1 = cij * 2 *lambda_ij * (h[j,e]  - h[i,e]);
                     rhs1_ID[i,e] -= d1; rhs1_ID[j,e] += d1;
                 end
             end
@@ -258,12 +196,12 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
                     # d1 = 0; d2 = 0; d3 = 0
                     # if h[i,e]>tol &&  h[i,e]>tol
                     # d1 = cij * lambda * (h[j,e] + b_e[j]  - h[i,e] - b_e[i]);
-                    d1 = cij * ts_ft*lambda * (h[j,e] - h[i,e]);
+                    d1 = cij * 2 *lambda * (h[j,e] - h[i,e]);
                     # if h[i,e]<=tol ||  h[j,e]<=tol
                     #     d1 = 0;
                     # end
                     # d1 = 0;
-                    d2 = cij * ts_ft*lambda * (hu[j,e] - hu[i,e]);
+                    d2 = cij * 2 *lambda * (hu[j,e] - hu[i,e]);
                     # end
                     fv1_i_ID -= d1
                     fv2_i_ID -= d2
@@ -309,6 +247,7 @@ DT = zeros(MAXIT)
 t = 0
 pl_idx = 1;
 global i;
+@time begin
 @gif for i = 1:MAXIT
     if i%100 == 0
         @show i, t
@@ -324,7 +263,7 @@ global i;
     lambda = maximum(abs.(hu./h)+sqrt.(g.*h))
     # dt1 = min(T-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
     dt1 = min(min(T,t_plot[pl_idx])-t, minimum(w)*J[1]/(ts_ft*lambda), dT);
-    rhs_1 = swe_1d_rhs(h, hu,btm, ops,vgeo,fgeo,mapP,dt1, g)
+    rhs_1 = swe_1d_rhs(h, hu,btm, ops,vgeo,fgeo,mapP,dt1, g, tol)
 
     htmp  = h  + dt1*rhs_1[1];
     hutmp = hu + dt1*rhs_1[2];
@@ -353,7 +292,7 @@ global i;
     end
 
     utmp = (htmp, hutmp, btm)
-    rhs_2 = swe_1d_rhs(h, hu,btm, ops,vgeo,fgeo,mapP,dt1, g)
+    rhs_2 = swe_1d_rhs(h, hu,btm, ops,vgeo,fgeo,mapP,dt1, g, tol)
     dt = min(dt1, dt2)
 
     h  .+= .5*dt*(rhs_1[1] + rhs_2[1])
@@ -386,6 +325,7 @@ global i;
         break
     end
 end #every 10
+end
 DT = DT[1:findmin(DT)[2]-1];
 plot(Vp*x,Vp*(h+btm),ylims=(-.1,50))
 

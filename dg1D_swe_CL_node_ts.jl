@@ -22,7 +22,7 @@ include("dg1d_swe_flux.jl")
 global g = 1
 "Approximation parameters"
 N   = 3 # The order of approximation
-K1D = 32
+K1D = 200
 CFL = 1/4
 T   = 1 # endtime
 MAXIT = 1000000
@@ -109,13 +109,13 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dT, g, tol)
     nxJ = fgeo
 
     u = hu./h;
-    hf = Vf*h; hP = hf[mapP]; dh = hP-hf;
-    huf = Vf*hu; huP = huf[mapP]; dhu = huP - huf;
-    uf = Vf*u; uP = uf[mapP]; du = uP - uf;
+    hf = E*h; hP = hf[mapP]; dh = hP-hf;
+    huf = E*hu; huP = huf[mapP]; dhu = huP - huf;
+    uf = E*u; uP = uf[mapP]; du = uP - uf;
     UL = (hf, huf); UR = (hP, huP); dU = (dh, dhu);
 
-    lambda = abs.(u)+sqrt.(g.*h)
-    lambdaM = Vf*lambda
+    lambdaC = abs.(u)+sqrt.(g.*h)
+    lambdaM = E*lambdaC
     lambdaP = lambdaM[mapP]
     c = max.(lambdaM, lambdaP)
     tau = 1
@@ -145,8 +145,8 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dT, g, tol)
                     rhs1_ID[i,e] += fv1_i_ID; rhs1_ID[j,e] += fv1_j_ID;
                     lambda_i = abs(u[i,e]*cij)+sqrt(g*h[i,e])
                     lambda_j = abs(u[j,e]*cij)+sqrt(g*h[j,e])
-                    lambda = max(lambda_i, lambda_j)
-                    d1 = cij * ts_ft*lambda * (h[j,e]  - h[i,e]);
+                    lambda_ij = max(lambda_i, lambda_j)
+                    d1 = cij * 2*lambda_ij * (h[j,e]  - h[i,e]);
                     rhs1_ID[i,e] -= d1; rhs1_ID[j,e] += d1;
                 end
             end
@@ -199,16 +199,16 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dT, g, tol)
 
                     lambda_i = abs(u[i,e]*cij)+sqrt(g*h[i,e])
                     lambda_j = abs(u[j,e]*cij)+sqrt(g*h[j,e])
-                    lambda = max(lambda_i, lambda_j)
+                    lambda_ij = max(lambda_i, lambda_j)
                     # d1 = 0; d2 = 0; d3 = 0
                     # if h[i,e]>tol &&  h[i,e]>tol
                     # d1 = cij * lambda * (h[j,e] + b_e[j]  - h[i,e] - b_e[i]);
-                    d1 = cij * ts_ft*lambda * (h[j,e] - h[i,e]);
+                    d1 = cij * 2*lambda_ij * (h[j,e] - h[i,e]);
                     # if h[i,e]<=tol ||  h[j,e]<=tol
                     #     d1 = 0;
                     # end
                     # d1 = 0;
-                    d2 = cij * ts_ft*lambda * (hu[j,e] - hu[i,e]);
+                    d2 = cij * 2*lambda_ij * (hu[j,e] - hu[i,e]);
                     # end
                     fv1_i_ID -= d1
                     fv2_i_ID -= d2
@@ -254,6 +254,7 @@ DT = zeros(MAXIT)
 t = 0
 pl_idx = 1;
 global i;
+@time begin
 @gif for i = 1:MAXIT
     if i%100 == 0
         @show i, t
@@ -309,6 +310,7 @@ global i;
         break
     end
 end #every 10
+end
 DT = DT[1:findmin(DT)[2]-1];
 plot(Vp*x,Vp*(h+btm),ylims=(-.1,50))
 
