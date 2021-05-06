@@ -17,21 +17,83 @@ using UnPack
 # push!(LOAD_PATH, "./StartUpDG/src") # user defined modules
 using StartUpDG
 using StartUpDG.ExplicitTimestepUtils
-include("dg1d_swe_flux_hrecon.jl")
+include("dg1d_swe_flux_zero.jl")
 
 global g = 1
 "Approximation parameters"
 N   = 2 # The order of approximation
-K1D = 64
+K1D = 32
 CFL = 1/4
-T   = 2 # endtime
-MAXIT = 100000
+T   = 1 # endtime
+MAXIT = 1000000
 tol = 1e-16
 t_plot = [T];
 ts_ft = 1;
 
+function make_meshfree_ops(r,w)
+        # p = 1
+        EL = [vandermonde_1D(1,[-1])/vandermonde_1D(1,r[1:2]) zeros(1,N-1)]
+        ER = [zeros(1,N-1) vandermonde_1D(1,[1])/vandermonde_1D(1,r[end-1:end])]
+        E  = [EL;ER]
+
+        # # using p=2 extrapolation
+        # EL = [vandermonde_1D(2,[-1])/vandermonde_1D(2,r[1:3]) zeros(1,N-2)]
+        # ER = [zeros(1,N-2) vandermonde_1D(2,[1])/vandermonde_1D(2,r[end-2:end])]
+        # E  = [EL;ER]
+
+        B = diagm([-1,1])
+
+        S = diagm(1=>ones(N),-1=>ones(N))
+        # S[1,3] = 1
+        # S[end,end-2] = 1
+        # S = one.(S)
+        adj = sparse(triu(S)-triu(S)')
+        # @show S
+        # @show adj
+        function build_weighted_graph_laplacian(adj,r,p)
+                Np = length(r)
+                L  = zeros(Np,Np)
+                for i = 1:Np
+                        for j = 1:Np
+                                if adj[i,j] != 0
+                                        L[i,j] += @. (.5*(r[i]+r[j]))^p
+                                end
+                        end
+                        L[i,i] = -sum(L[i,:])
+                end
+                return L
+        end
+
+        # constant exactness
+        L = build_weighted_graph_laplacian(adj,r,0)
+        @show L
+        b1 = zeros(N+1) - .5*sum(E'*B*E,dims=2)
+        ψ1 = pinv(L)*b1
+
+        ψx = pinv(L)*(w - .5*E'*B*E*r)
+
+        function fillQ(adj,ψ,r,p)
+                Np = length(ψ)
+                Q = zeros(Np,Np)
+                for i = 1:Np
+                        for j = 1:Np
+                                if adj[i,j] != 0
+                                        Q[i,j] += (ψ[j]-ψ[i])*r[j]^p #(ψ[j]-ψ[i])*(.5*(r[i]+r[j]))^p
+                                end
+                        end
+                end
+                return Q
+        end
+
+        S1 = fillQ(adj,ψ1,r,0)
+        Q = S1 + .5*E'*B*E # first order accuracy
+        # S1 = fillQ(adj,ψx,r,0)
+        # Q = S1 + .5*E'*B*E # first order accuracy
+        return Q,E,B,ψ1
+end
+
 "Mesh related variables"
-VX = LinRange(-1,1,K1D+1)
+VX = LinRange(-5,5,K1D+1)
 EToV = transpose(reshape(sort([1:K1D; 2:K1D+1]),2,K1D))
 
 "Construct matrices on reference elements"
@@ -76,15 +138,14 @@ Mf_inv = E*M_inv*E'
 # M_inv = spdiagm(0 => 1 ./vec(diagm(w)*J))
 
 "initial conditions"
-btm = max.(0, -20(x.-1/8).*(x.+1/8).+2)
-# h = 2.05 .- btm;
-# h[findall(x->x<tol, h)] .= tol;
-# btm = btm*0;
+a = 2; B = 2; h0 = 8;
 
-h = 0*x;
-h[:,1:convert(Int,K1D/2)] .= 2 .- btm[:,1:convert(Int,K1D/2)];
-h[:,convert(Int,K1D/2)+1:K1D] .= 3 .- btm[:,convert(Int,K1D/2)+1:K1D];
-h[findall(x->x<tol, h)] .= tol;
+btm = h0.*(x./a).^2
+omega = sqrt(2*g*h0)/a
+
+h = h0 .- B^2/(4*g)*cos(2*omega*0) .- B^2/(4*g) .- (B*x)/(2*a)*sqrt(8*h0/g)*cos(omega*0);
+h = h - btm;
+h[findall(x->x<tol, h)] .= 0;
 
 hu = h*0;
 h0 = copy(h);
@@ -99,24 +160,22 @@ dT = T/Nsteps
 "pack arguments into tuples - will "
 u    = (h, hu, btm)
 ops  = (Q_IDskew, Q_ID, Q_ESskew, Q_ES, E, M_inv, Mf_inv)
-# ops  = (Q_ID, Q_ID, Q_ESskew, Q_ES, E, M_inv, Mf_inv)
 vgeo = (rxJ,J)
 fgeo = (nxJ)
 nodemaps = (mapM, mapP)
 
-function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
+function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g, tol)
     # h, hu = U
     Q_ID, Qb_ID, Q_ES, Qb_ES, E, M_inv, Mf_inv = ops
     rxJ,J = vgeo
     nxJ = fgeo
 
     u = hu./h;
+    u[findall(x->x<tol, h)] .= 0
     hf = Vf*h; hP = hf[mapP]; dh = hP-hf;
     huf = Vf*hu; huP = huf[mapP]; dhu = huP - huf;
     uf = Vf*u; uP = uf[mapP]; du = uP - uf;
-    bf = Vf*btm; bP = bf[mapP];
-    UL = (hf, huf, bf); UR = (hP, huP, bP); dU = (dh, dhu);
-
+    UL = (hf, huf); UR = (hP, huP); dU = (dh, dhu);
 
     lambda = abs.(u)+sqrt.(g.*h)
     lambdaM = Vf*lambda
@@ -126,10 +185,10 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
 
     ##surface part
     #ES part
-    f1_ES, f2_ES = swe_1d_esdg_surface(UL, UR, dU, E, nxJ, c, tol, g);
+    f1_ES, f2_ES = swe_1d_esdg_surface(UL, UR, dU, E, nxJ, c, g, tol);
     # @show norm(f1_ES_f - f1_ES), norm(f2_ES_f - f2_ES), norm(f3_ES_f - f3_ES)
     #ID part
-    f1_ID, f2_ID = swe_1d_ID_surface(UL, UR, dU, E, nxJ, c, tol,  g);
+    f1_ID, f2_ID = swe_1d_ID_surface(UL, UR, dU, E, nxJ, c, g, tol);
     # f1_ID, f2_ID, f3_ID = swe_2d_esdg_surface(UL, UR, dU, Pf, c);
 
 
@@ -139,26 +198,18 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
     #build low order solution first
     for e = 1:size(h,2)
         for i=1:Nq
-            UL_E = (h[i,e], hu[i,e], btm[i,e]);
+            UL_E = (h[i,e], hu[i,e]);
             for j=i:Nq
-                UR_E = (h[j,e], hu[j,e], btm[j,e])
+                UR_E = (h[j,e], hu[j,e])
                 if Q_ID[i,j]!=0
-                    hi = hrecon(h[i,e], btm[i,e], btm[j,e], tol);
-                    hj = hrecon(h[j,e], btm[j,e], btm[i,e], tol);
-
-                    hui = hu[i,e]/h[i,e]*hi; huj = hu[j,e]/h[j,e]*hj;
-                    UR_I = (hi,hu[i,e]);UL_I = (hj,huj, btm[j,e]);
-                    fv1_i_ID = swe_1d_ID_h(UR_I, Q_ID, i, j, tol, g);
-                    fv1_j_ID = swe_1d_ID_h(UL_I, Q_ID, j, i, tol, g);
+                    fv1_i_ID = swe_1d_ID_h(UR_E, Q_ID, i, j, g, tol);
+                    fv1_j_ID = swe_1d_ID_h(UL_E, Q_ID, j, i, g, tol);
 
                     rhs1_ID[i,e] += fv1_i_ID; rhs1_ID[j,e] += fv1_j_ID;
-                    lambda_i = abs(u[i,e]*cij)#+sqrt(g*h[i,e])
-                    lambda_j = abs(u[j,e]*cij)#+sqrt(g*h[j,e])
+                    lambda_i = abs(u[i,e]*cij)+sqrt(g*h[i,e])
+                    lambda_j = abs(u[j,e]*cij)+sqrt(g*h[j,e])
                     lambda = max(lambda_i, lambda_j)
-                    hi = hrecon(h[i,e], btm[i,e], btm[j,e], tol);
-                    hj = hrecon(h[j,e], btm[j,e], btm[i,e], tol);
-                    # d1 = cij * lambda * (h[j,e]  - h[i,e]);
-                    d1 = cij * lambda * (hj - hi);
+                    d1 = cij * lambda * (h[j,e]  - h[i,e]);
                     rhs1_ID[i,e] -= d1; rhs1_ID[j,e] += d1;
                 end
             end
@@ -172,10 +223,6 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
     lf = (h_L_next_f .-tol)./(Nq*Mf_inv*(f1_ESf-f1_IDf)*dt);
     lf[findall(x->x<tol, f1_ESf-f1_IDf)] .= 1;
     for e = 1:size(h,2)
-        if minimum(h[:,e])<=tol
-            lf[:,e] .=0;
-            continue;
-        end
         for i = 1:Nfq
             if h_L_next_f[i,e]< tol || hf[i,e]< tol
                 lf[i,e] = 0.0;
@@ -183,50 +230,36 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
             end
         end
     end
-    # lf = min.(lf, lf[mapP]);
-    lf = min.(1.0, lf); lf = max.(lf,0.0);
+    lf = min.(lf, lf[mapP]); lf = min.(1.0, lf); lf = max.(lf,0.0);
     lf = E'*lf;
     # lf = zeros(size(h));
     # lf = ones(size(lf));
     rhs1_CL = f1_ID + lf.*(f1_ES - f1_ID);
     rhs2_CL = f2_ID + lf.*(f2_ES - f2_ID);
-    r1 = copy(rhs1_CL); r2 = copy(rhs2_CL);
-    rec = zeros(Float64, (Nq, Nq,size(h,2)));
+
     ##volume part
     # loop over all elements
     for e = 1:size(h,2)
-        # b_e = btm[:,e];
-        hmim = minimum(h[:,e]);
-        h_L_next_min = minimum(h_L_next[:,e]);
+        b_e = btm[:,e];
         for i=1:Nq
-            UL_E = (h[i,e], hu[i,e], btm[i,e]);
+            UL_E = (h[i,e], hu[i,e]);
             for j=i:Nq
-                UR_E = (h[j,e], hu[j,e], btm[j,e])
-                fv1_i_ES, fv2_i_ES, fv1_j_ES, fv2_j_ES = swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, tol,  g)
-                rec[j,i,e] = fv2_j_ES; rec[i,j,e] = fv2_i_ES;
+                UR_E = (h[j,e], hu[j,e])
+                fv1_i_ES, fv2_i_ES, fv1_j_ES, fv2_j_ES = swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, b_e, g, tol)
+
                 fv1_i_ID = 0.0; fv2_i_ID = 0.0; fv3_i_ID = 0.0;
                 fv1_j_ID = 0.0; fv2_j_ID = 0.0; fv3_j_ID = 0.0;
-                if Q_ID[i,j]!=0 #|| i == j
-                    hi = hrecon(h[i,e], btm[i,e], btm[j,e], tol);
-                    hj = hrecon(h[j,e], btm[j,e], btm[i,e], tol);
+                if Q_ID[i,j]!=0 || i == j
+                    fv1_i_ID, fv2_i_ID = swe_1d_ID_vol(UR_E, ops, vgeo, i, j, b_e, g, tol);
+                    fv1_j_ID, fv2_j_ID = swe_1d_ID_vol(UL_E, ops, vgeo, j, i, b_e, g, tol);
 
-                    hui = hu[i,e]/h[i,e]*hi; huj = hu[j,e]/h[j,e]*hj;
-                    UR_I = (hi,hu[i,e]);UL_I = (hj,huj, btm[j,e]);
-                    fv1_i_ID, fv2_i_ID = swe_1d_ID_vol(UR_I, ops, vgeo, i, j, btm[j,e], tol, g);
-                    fv1_j_ID, fv2_j_ID = swe_1d_ID_vol(UL_I, ops, vgeo, j, i, btm[i,e], tol, g);
-
-                    lambda_i = abs(u[i,e]*cij)#+sqrt(g*h[i,e])
-                    lambda_j = abs(u[j,e]*cij)#+sqrt(g*h[j,e])
+                    lambda_i = abs(u[i,e]*cij)+sqrt(g*h[i,e])
+                    lambda_j = abs(u[j,e]*cij)+sqrt(g*h[j,e])
                     lambda = max(lambda_i, lambda_j)
-
-                    # hi = hrecon(h[i,e], btm[i,e], btm[j,e], tol);
-                    # hj = hrecon(h[j,e], btm[j,e], btm[i,e], tol);
                     # d1 = 0; d2 = 0; d3 = 0
                     # if h[i,e]>tol &&  h[i,e]>tol
                     # d1 = cij * lambda * (h[j,e] + b_e[j]  - h[i,e] - b_e[i]);
-                    # d1 = cij * lambda * (h[j,e] - h[i,e]);
-                    d1 = cij * lambda * (hj - hi);
-
+                    d1 = cij * lambda * (h[j,e] - h[i,e]);
                     # if h[i,e]<=tol ||  h[j,e]<=tol
                     #     d1 = 0;
                     # end
@@ -238,29 +271,22 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
                     fv1_j_ID += d1
                     fv2_j_ID += d2
                 end
-                # rec[j,i,e] = fv2_j_ID; rec[i,j,e] = fv2_i_ID;
-                l = 0;
-                if hmim >tol || h_L_next_min >tol
-                    l_ij = (h_L_next[i,e] -tol)/(Nq*M_inv[i,i]*(fv1_i_ES-fv1_i_ID)*dt);
-                    if fv1_i_ES-fv1_i_ID<tol
-                        l_ij = 1.0
-                    end
-                    l_ji = (h_L_next[j,e] -tol)/(Nq*M_inv[j,j]*(fv1_j_ES-fv1_j_ID)*dt);
-                    if fv1_j_ES-fv1_j_ID<tol
-                        l_ji = 1.0
-                    end
-                    l = min(l_ij, l_ji);
-                    l = min(1.0,l);
-                    l = max(l,0.0);
+                l_ij = (h_L_next[i,e] -tol)/(Nq*M_inv[i,i]*(fv1_i_ES-fv1_i_ID)*dt);
+                if fv1_i_ES-fv1_i_ID<tol
+                    l_ij = 1.0
+                end
+                l_ji = (h_L_next[j,e] -tol)/(Nq*M_inv[j,j]*(fv1_j_ES-fv1_j_ID)*dt);
+                if fv1_j_ES-fv1_j_ID<tol
+                    l_ji = 1.0
+                end
+                l = min(l_ij, l_ji);
+                l = min(1.0,l);
+                l = max(l,0.0);
+
+                if h[i,e] < tol || h[j,e] < tol || h_L_next[i,e]< tol || h_L_next[j,e]< tol #|| fv1_ES-fv1_i_ID < tol
+                    l = 0.0;
                 end
 
-                # if h[i,e] < tol || h[j,e] < tol || h_L_next[i,e]< tol || h_L_next[j,e]< tol #|| fv1_ES-fv1_i_ID < tol
-                #     l = 0.0;
-                # end
-                # rec[i,j,e] = fv2_i_ID;
-                # @show rec[i,j,e]
-                # rec[j,i,e] = fv2_j_ID;
-                # @show rec[j,i,e]
                 # l = 0.0;
                 rhs1_CL[i,e] += fv1_i_ID + l * (fv1_i_ES-fv1_i_ID);
                 rhs2_CL[i,e] += fv2_i_ID + l * (fv2_i_ES-fv2_i_ID);
@@ -268,10 +294,6 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
                     rhs1_CL[j,e] += fv1_j_ID + l * (fv1_j_ES-fv1_j_ID);
                     rhs2_CL[j,e] += fv2_j_ID + l * (fv2_j_ES-fv2_j_ID);
                 end
-                # if e == 2
-                #     @show i,j, fv2_i_ID, fv2_j_ID, rhs2_CL[i,e], rhs2_CL[j,e]
-                #     @show rec[:,:,2]
-                # end
             end
         end
     end
@@ -300,40 +322,46 @@ global i;
     #     @. u   += rk4b[INTRK]*resu
     # end
     # Heun's method - this is an example of a 2nd order SSP RK method
-    local lambda = maximum(abs.(hu./h)+sqrt.(g.*h))
+    u = hu./h;
+    u[findall(x->x<tol, h)] .= 0
+    lambda = maximum(abs.(u)+sqrt.(g.*h))
     # dt1 = min(T-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
-    local dt1 = min(min(T,t_plot[pl_idx])-t, minimum(w)*J[1]/(ts_ft*lambda), dT);
-    local rhs_1 = swe_1d_rhs(h, hu,btm, ops,vgeo,fgeo,mapP,dt1, g)
+    dt1 = min(min(T,t_plot[pl_idx])-t, minimum(w)*J[1]/(ts_ft*lambda), dT);
+    rhs_1 = swe_1d_rhs(h, hu,btm, ops,vgeo,fgeo,mapP,dt1, g, tol)
 
-    local htmp  = h  + dt1*rhs_1[1];
-    local hutmp = hu + dt1*rhs_1[2];
+    htmp  = h  + dt1*rhs_1[1];
+    hutmp = hu + dt1*rhs_1[2];
     # utmp = (htmp, hutmp)
     # htmp[findall(x->x<tol, htmp)] .= tol;
     hutmp[findall(x->x<2*tol, htmp)] .= 0;
     # @show L1, htmp dt1
 
     h_min, pos = findmin(htmp)
-    if h_min <= 0
+    if h_min < 0
        # @show L1
        error("htmp_min<0 ", h_min, pos, "iteration ", i )
     end
-    lambda = maximum(abs.(hutmp./htmp)+sqrt.(g.*htmp))
-    local dt2 = min(min(T,t_plot[pl_idx])-t, minimum(w)*J[1]/(ts_ft*lambda), dT);
+    utemp = hutmp./htmp;
+    utemp[findall(x->x<tol, htmp)] .= 0
+    lambda = maximum(abs.(utemp)+sqrt.(g.*htmp))
+    dt2 = min(min(T,t_plot[pl_idx])-t, minimum(w)*J[1]/(ts_ft*lambda), dT);
 
     while dt2<dt1
         dt1 = dt2
         # rhsh1, rhshu1, L1 = convex_limiter(rhsh_ES1, rhshu_ES1, rhsh_ID1, rhshu_ID1, h, h, tol, dt1)
         htmp  = h  + dt1*rhs_1[1];
         hutmp = hu + dt1*rhs_1[2];
-        # htmp[findall(x->x<tol, htmp)] .= tol;
+        htmp[findall(x->x<tol, htmp)] .= tol;
         hutmp[findall(x->x<2*tol, htmp)] .= 0;
-        lambda = maximum(abs.(hutmp./htmp)+sqrt.(g.*htmp))
+        utemp = hutmp./htmp;
+        utemp[findall(x->x<tol, htmp)] .= 0
+        lambda = maximum(abs.(utemp)+sqrt.(g.*htmp))
         dt2 = min(min(T,t_plot[pl_idx])-t, minimum(w)*J[1]/(ts_ft*lambda), dT);
     end
 
     utmp = (htmp, hutmp, btm)
-    rhs_2 = swe_1d_rhs(h, hu,btm, ops,vgeo,fgeo,mapP,dt1, g)
-    local dt = min(dt1, dt2)
+    rhs_2 = swe_1d_rhs(h, hu,btm, ops,vgeo,fgeo,mapP,dt1, g, tol)
+    dt = min(dt1, dt2)
 
     h  .+= .5*dt*(rhs_1[1] + rhs_2[1])
     hu .+= .5*dt*(rhs_1[2] + rhs_2[2])
@@ -341,12 +369,11 @@ global i;
     hu[findall(x->x<2*tol, h)] .= 0
     # @show L2, h, dt
     h_min, pos = findmin(h)
-    if h_min <=0
+    if h_min <0
         # @show L2
         @show maximum(hu./h)
         error("h_min<0 ", h_min, pos, "iteration ", i )
     end
-    # @show minimum(abs.(h))
     u = (h,hu)
     t +=dt
     if t>=T
@@ -369,4 +396,10 @@ global i;
     end
 end #every 10
 DT = DT[1:findmin(DT)[2]-1];
-plot(Vp*x,Vp*h,ylims=(-.1,4.5))
+plot(Vp*x,Vp*(h+btm),ylims=(-.1,50))
+
+h0 = 8
+h_final = h0 .- B^2/(4*g)*cos(2*omega*t) .- B^2/(4*g) .- (B*x)/(2*a)*sqrt(8*h0/g)*cos(omega*t);
+h_final = h_final - btm;
+h_final[findall(x->x<tol, h_final)] .= tol;
+plot(Vp*x,Vp*(h_final+btm),ylims=(-.1,50))

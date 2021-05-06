@@ -22,13 +22,13 @@ include("dg1d_swe_flux.jl")
 global g = 1
 "Approximation parameters"
 N   = 3 # The order of approximation
-K1D = 64
+K1D = 200
 CFL = 1/4
-T   = 0.5 # endtime
+T   = 1 # endtime
 MAXIT = 1000000
-tol = 1e-12
+tol = 1e-16
 t_plot = [T];
-ts_ft = 2;
+global ts_ft = 2;
 
 function make_meshfree_ops(r,w)
         # p = 1
@@ -93,7 +93,7 @@ function make_meshfree_ops(r,w)
 end
 
 "Mesh related variables"
-VX = LinRange(-1,1,K1D+1)
+VX = LinRange(-5,5,K1D+1)
 EToV = transpose(reshape(sort([1:K1D; 2:K1D+1]),2,K1D))
 
 "Construct matrices on reference elements"
@@ -138,17 +138,17 @@ Mf_inv = E*M_inv*E'
 # M_inv = spdiagm(0 => 1 ./vec(diagm(w)*J))
 
 "initial conditions"
-btm = max.(0, -20(x.-1/8).*(x.+1/8).+2)
-h = 2.0 .- btm;
-h[findall(x->x<tol, h)] .= tol;
-# btm = btm*0;
+a = 2; B = 2; h0 = 8;
 
-#
-# h = h*0 .+2
-# h[:,1:convert(Int,K1D/2)] .= 1e-10
-# h[:,convert(Int,K1D/2)+1:K1D] .= 1.0
+btm = h0.*(x./a).^2
+omega = sqrt(2*g*h0)/a
+
+h = h0 .- B^2/(4*g)*cos(2*omega*0) .- B^2/(4*g) .- (B*x)/(2*a)*sqrt(8*h0/g)*cos(omega*0);
+h = h - btm;
+h[findall(x->x<tol, h)] .= tol;
+
 hu = h*0;
-h0 = copy(h);
+h_0 = copy(h);
 
 "Time integration"
 rk4a,rk4b,rk4c = ck45()
@@ -208,7 +208,7 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
                     lambda_i = abs(u[i,e]*cij)+sqrt(g*h[i,e])
                     lambda_j = abs(u[j,e]*cij)+sqrt(g*h[j,e])
                     lambda = max(lambda_i, lambda_j)
-                    d1 = cij * lambda * (h[j,e]  - h[i,e]);
+                    d1 = cij * ts_ft*lambda * (h[j,e]  - h[i,e]);
                     rhs1_ID[i,e] -= d1; rhs1_ID[j,e] += d1;
                 end
             end
@@ -219,8 +219,8 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
     h_L_next = h - M_inv * rhs1_ID *dt;
     h_L_next_f = E*h_L_next;
     f1_IDf = E*f1_ID; f1_ESf = E*f1_ES;
-    lf = (h_L_next_f .-tol)./(Nq*Mf_inv*(f1_ESf-f1_IDf)*dt);
-    lf[findall(x->x<tol, f1_ESf-f1_IDf)] .= 1;
+    lf = (h_L_next_f .- tol)./(Nq*Mf_inv*(f1_ESf-f1_IDf)*dt);
+    lf[findall(x->x<=0, f1_ESf-f1_IDf)] .= 1;
     for e = 1:size(h,2)
         for i = 1:Nfq
             if h_L_next_f[i,e]< tol || hf[i,e]< tol
@@ -258,12 +258,12 @@ function swe_1d_rhs(h, hu, btm, ops, vgeo, fgeo, mapP, dt, g)
                     # d1 = 0; d2 = 0; d3 = 0
                     # if h[i,e]>tol &&  h[i,e]>tol
                     # d1 = cij * lambda * (h[j,e] + b_e[j]  - h[i,e] - b_e[i]);
-                    d1 = cij * lambda * (h[j,e] - h[i,e]);
+                    d1 = cij * ts_ft*lambda * (h[j,e] - h[i,e]);
                     # if h[i,e]<=tol ||  h[j,e]<=tol
                     #     d1 = 0;
                     # end
                     # d1 = 0;
-                    d2 = cij * lambda * (hu[j,e] - hu[i,e]);
+                    d2 = cij * ts_ft*lambda * (hu[j,e] - hu[i,e]);
                     # end
                     fv1_i_ID -= d1
                     fv2_i_ID -= d2
@@ -330,7 +330,7 @@ global i;
     hutmp = hu + dt1*rhs_1[2];
     # utmp = (htmp, hutmp)
     # htmp[findall(x->x<tol, htmp)] .= tol;
-    hutmp[findall(x->x<2*tol, htmp)] .= 0;
+    hutmp[findall(x->x<tol, htmp)] .= 0;
     # @show L1, htmp dt1
 
     h_min, pos = findmin(htmp)
@@ -346,8 +346,8 @@ global i;
         # rhsh1, rhshu1, L1 = convex_limiter(rhsh_ES1, rhshu_ES1, rhsh_ID1, rhshu_ID1, h, h, tol, dt1)
         htmp  = h  + dt1*rhs_1[1];
         hutmp = hu + dt1*rhs_1[2];
-        htmp[findall(x->x<tol, htmp)] .= tol;
-        hutmp[findall(x->x<2*tol, htmp)] .= 0;
+        # htmp[findall(x->x<tol, htmp)] .= tol;
+        hutmp[findall(x->x<tol, htmp)] .= 0;
         lambda = maximum(abs.(hutmp./htmp)+sqrt.(g.*htmp))
         dt2 = min(min(T,t_plot[pl_idx])-t, minimum(w)*J[1]/(ts_ft*lambda), dT);
     end
@@ -359,7 +359,7 @@ global i;
     h  .+= .5*dt*(rhs_1[1] + rhs_2[1])
     hu .+= .5*dt*(rhs_1[2] + rhs_2[2])
     # h[findall(x->x<tol, h)] .= tol
-    hu[findall(x->x<2*tol, h)] .= 0
+    hu[findall(x->x<tol, h)] .= 0
     # @show L2, h, dt
     h_min, pos = findmin(h)
     if h_min <=0
@@ -367,13 +367,11 @@ global i;
         @show maximum(hu./h)
         error("h_min<0 ", h_min, pos, "iteration ", i )
     end
-    u = (h,hu)
-    t +=dt
     if t>=T
             break
     end
     u = (h,hu, btm)
-    t +=dt
+    t += dt
     DT[i] = dt
     i +=1
     # if t>= t_plot[pl_idx] #|| i==Nsteps
@@ -389,4 +387,10 @@ global i;
     end
 end #every 10
 DT = DT[1:findmin(DT)[2]-1];
-plot(Vp*x,Vp*h,ylims=(-.1,4.5))
+plot(Vp*x,Vp*(h+btm),ylims=(-.1,50))
+
+h0 = 8
+h_final = h0 .- B^2/(4*g)*cos(2*omega*t) .- B^2/(4*g) .- (B*x)/(2*a)*sqrt(8*h0/g)*cos(omega*t);
+h_final = h_final - btm;
+h_final[findall(x->x<tol, h_final)] .= tol;
+plot!(Vp*x,Vp*(h_final+btm),ylims=(-.1,50), linestyle = :dot)

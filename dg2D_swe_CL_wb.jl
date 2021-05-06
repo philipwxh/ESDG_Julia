@@ -152,6 +152,16 @@ h0 = copy(h)
 
 # h[:,1:K1D] .= 1e-10; h[:,K1D+1:end] .= 1
 
+######
+# a = 2; B = 2; h0 = 8;
+#
+# btm = h0.*(xq./a).^2
+# omega = sqrt(2*g*h0)/a
+#
+# h = h0 .- B^2/(4*g)*cos(2*omega*0) .- B^2/(4*g) .- (B*xq)/(2*a)*sqrt(8*h0/g)*cos(omega*0);
+# h = h - btm;
+# h[findall(x->x<tol, h)] .= tol;
+#######
 
 hu = h*0;
 # hu[findall(x->x>2.001, h)] .= 1;

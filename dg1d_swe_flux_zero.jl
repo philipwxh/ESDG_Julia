@@ -1,21 +1,27 @@
 avg(a,b) = .5*(a+b)
-function fS1D(UL,UR,g)
+function fS1D(UL,UR,g, tol)
     hL,huL = UL
     hR,huR = UR
     uL = huL./hL
     uR = huR./hR
+    if hL< tol
+        uL = 0;
+    end
+    if hR<tol
+        uR = 0;
+    end
     fxS1 = @. avg(huL,huR)
     fxS2 = @. avg(huL,huR)*avg(uL,uR) + .5*g*hL*hR
     return fxS1,fxS2
 end
 
-function fS1D_LF(UL,UR,g)
+function fS1D_sur(UL,UR,g, tol)
     hL,huL = UL
     hR,huR = UR
-    uL = huL./hL
-    uR = huR./hR
+    uL = huL./hL; uL[findall(x->x<2*tol, hL)] .= 0;
+    uR = huR./hR; uR[findall(x->x<2*tol, hR)] .= 0;
     fxS1 = @. avg(huL,huR)
-    fxS2 = @. avg(huL*uL,huR*uR) + .5*g*avg(hL*hL,hR*hR)
+    fxS2 = @. avg(huL,huR)*avg(uL,uR) + .5*g*hL*hR
     return fxS1,fxS2
 end
 
@@ -54,8 +60,8 @@ function convex_limiter(rhsh_ES, rhshu_ES, rhsh_ID, rhshu_ID, hh, htmp, tol, dt)
     return rhsh, rhshu, L
 end
 
-function swe_1d_esdg_surface(UL, UR, dU, E, nxJ, c, g)::Tuple{Array{Float64,2},Array{Float64,2}}
-    (fxS1,fxS2) = fS1D(UL,UR,g)
+function swe_1d_esdg_surface(UL, UR, dU, E, nxJ, c, g, tol)::Tuple{Array{Float64,2},Array{Float64,2}}
+    (fxS1,fxS2) = fS1D_sur(UL,UR,g, tol)
     (hf, huf) = UL; (hP, huP) = UR; (dh, dhu) = dU;
     Fs1 = fxS1.*nxJ; Fs2 = fxS2.*nxJ;
     tau = 1
@@ -64,10 +70,10 @@ function swe_1d_esdg_surface(UL, UR, dU, E, nxJ, c, g)::Tuple{Array{Float64,2},A
     return f1_ES, f2_ES
 end
 
-function swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, btm, g)
+function swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, btm, g, tol)
     Q_ID, Qb_ID, Q_ES, Qb_ES, E, M_inv, Mf_inv = ops
     rxJ,J = vgeo
-    (FxV1,FxV2)= fS1D(UL_E,UR_E,g)
+    (FxV1,FxV2)= fS1D(UL_E,UR_E,g, tol)
     h_i, hu_i = UL_E; h_j, hu_j = UR_E;
 
     QNx_ij = Q_ES[i,j]*2;
@@ -80,9 +86,9 @@ function swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, btm, g)
 
 end
 
-function swe_1d_ID_surface(UL, UR, dU, E, nxJ, c, g)::Tuple{Array{Float64,2},Array{Float64,2}}
+function swe_1d_ID_surface(UL, UR, dU, E, nxJ, c, g, tol)::Tuple{Array{Float64,2},Array{Float64,2}}
     # (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
-    (fxS1,fxS2) = fS1D(UL,UR,g)
+    (fxS1,fxS2) = fS1D_sur(UL,UR,g, tol)
     (hf, huf) = UL; (hP, huP) = UR; (dh, dhu) = dU;
     fs1 = fxS1.*nxJ; fs2 = fxS2.*nxJ;
     tau = 1
@@ -91,11 +97,11 @@ function swe_1d_ID_surface(UL, UR, dU, E, nxJ, c, g)::Tuple{Array{Float64,2},Arr
     return f1_ID, f2_ID
 end
 
-function swe_1d_ID_vol(UL_E, ops, vgeo, i, j, btm, g)
+function swe_1d_ID_vol(UL_E, ops, vgeo, i, j, btm, g, tol)
     Q_ID, Qb_ID, Q_ES, Qb_ES, E, M_inv, Mf_inv = ops
     rxJ,J = vgeo
     # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
-    (fxV1,fxV2)= fS1D(UL_E,UL_E,g)
+    (fxV1,fxV2)= fS1D(UL_E,UL_E,g, tol)
     h_i, hu_i = UL_E;
 
     QNx_ij = Q_ID[i,j];QNb_ij = Qb_ID[i,j];
@@ -105,73 +111,11 @@ function swe_1d_ID_vol(UL_E, ops, vgeo, i, j, btm, g)
     return fv1_ID, fv2_ID
 end
 
-function swe_1d_ID_h(UL_E, Q_ID, i, j, g)
+function swe_1d_ID_h(UL_E, Q_ID, i, j, g, tol)
     # (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
     # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
-    (fxV1,fxV2) = fS1D(UL_E,UL_E,g)
+    (fxV1,fxV2) = fS1D(UL_E,UL_E,g, tol)
     Q_ID_ij = Q_ID[i,j]
     fv1_ID  = Q_ID_ij*fxV1
     return fv1_ID
-end
-
-function make_meshfree_ops(r,w)
-        # p = 1
-        EL = [vandermonde_1D(1,[-1])/vandermonde_1D(1,r[1:2]) zeros(1,N-1)]
-        ER = [zeros(1,N-1) vandermonde_1D(1,[1])/vandermonde_1D(1,r[end-1:end])]
-        E  = [EL;ER]
-
-        # # using p=2 extrapolation
-        # EL = [vandermonde_1D(2,[-1])/vandermonde_1D(2,r[1:3]) zeros(1,N-2)]
-        # ER = [zeros(1,N-2) vandermonde_1D(2,[1])/vandermonde_1D(2,r[end-2:end])]
-        # E  = [EL;ER]
-
-        B = diagm([-1,1])
-
-        S = diagm(1=>ones(N),-1=>ones(N))
-        # S[1,3] = 1
-        # S[end,end-2] = 1
-        # S = one.(S)
-        adj = sparse(triu(S)-triu(S)')
-        # @show S
-        # @show adj
-        function build_weighted_graph_laplacian(adj,r,p)
-                Np = length(r)
-                L  = zeros(Np,Np)
-                for i = 1:Np
-                        for j = 1:Np
-                                if adj[i,j] != 0
-                                        L[i,j] += @. (.5*(r[i]+r[j]))^p
-                                end
-                        end
-                        L[i,i] = -sum(L[i,:])
-                end
-                return L
-        end
-
-        # constant exactness
-        L = build_weighted_graph_laplacian(adj,r,0)
-        @show L
-        b1 = zeros(N+1) - .5*sum(E'*B*E,dims=2)
-        ψ1 = pinv(L)*b1
-
-        ψx = pinv(L)*(w - .5*E'*B*E*r)
-
-        function fillQ(adj,ψ,r,p)
-                Np = length(ψ)
-                Q = zeros(Np,Np)
-                for i = 1:Np
-                        for j = 1:Np
-                                if adj[i,j] != 0
-                                        Q[i,j] += (ψ[j]-ψ[i])*r[j]^p #(ψ[j]-ψ[i])*(.5*(r[i]+r[j]))^p
-                                end
-                        end
-                end
-                return Q
-        end
-
-        S1 = fillQ(adj,ψ1,r,0)
-        Q = S1 + .5*E'*B*E # first order accuracy
-        # S1 = fillQ(adj,ψx,r,0)
-        # Q = S1 + .5*E'*B*E # first order accuracy
-        return Q,E,B,ψ1
 end

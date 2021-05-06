@@ -14,9 +14,42 @@ function fS1D(UL,UR,tol, g)
     # uR = huR./hR
     # hLs = max.(0,hL .- tol + bL - max.(bL,bR))
     # hRs = max.(0,hR .- tol + bR - max.(bL,bR))
+    # huL = hLs.*uL; huR = hRs.*uR;
     # fxS1 = @. avg(huL,huR)
-    # fxS2 = @. avg(huL,huR)*avg(uL,uR) + .5*g*hLs*hRs - .5*g*(hL.^2 - hLs.^2);
+    # fxS2 = @. avg(huL,huR)*avg(uL,uR) + .5*g*hLs*hRs - .5*g*(hRs.^2 - hLs.^2);
+    # @show hL, hLs, hR, hRs, fxS2
     # return fxS1,fxS2
+end
+
+function fS1D_ID_sur(UL,UR,tol, g)
+    hL,huL = UL
+    hR,huR = UR
+    uL = huL./hL
+    uR = huR./hR
+    uL[findall(x->x<=0,hL)].== 0
+    uR[findall(x->x<=0,hR)].== 0
+
+    fxS1 = @. avg(huL,huR)
+    fxS2 = @. avg(huL,huR)*avg(uL,uR) + .5*g*hL*hR
+    # fxS1 = @. avg(huL,huR)
+    # fxS2 = @. avg(huL,huR)*avg(uL,uR) - .5*g*(hR.^2 - hL.^2);
+    return fxS1,fxS2
+end
+
+function fS1D_ID_vol(UL,UR,tol, g)
+    hL,huL = UL
+    hR,huR = UR
+    uL = huL/hL
+    uR = huR/hR
+    if hL== 0
+        uL = 0
+    end
+    if hR == 0
+        uR = 0;
+    end
+    fxS1 = @. avg(huL,huR)
+    fxS2 = @. avg(huL,huR)*avg(uL,uR) - .5*g*(hR.^2 - hL.^2);
+    return fxS1,fxS2
 end
 
 function fS1D_LF(UL,UR,tol,g)
@@ -44,7 +77,7 @@ function swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, tol, g)
     rxJ,J = vgeo
     (FxV1,FxV2)= fS1D(UL_E,UR_E,tol,g)
     h_i, hu_i, b_i = UL_E; h_j, hu_j, b_j = UR_E;
-    h_i = max(h_i-tol, 0); h_j = max(h_j-tol, 0);
+    # h_i = max(h_i-tol, 0); h_j = max(h_j-tol, 0);
 
     QNx_ij = Q_ES[i,j]*2;
     QNb_ij = Qb_ES[i,j];
@@ -52,10 +85,10 @@ function swe_1d_esdg_vol(UL_E, UR_E, ops, vgeo, i, j, tol, g)
     fv1_ES   =  QNx_ij*FxV1;
     fv2_i_ES =  QNx_ij*FxV2 + g*h_i*QNb_ij*b_j;
     fv2_j_ES = -QNx_ij*FxV2 - g*h_j*QNb_ij*b_i;
-    if h_i <=0
+    if h_i <=tol
         fv2_j_ES = 0;
     end
-    if h_j <=0
+    if h_j <=tol
         fv2_i_ES = 0;
     end
     return fv1_ES, fv2_i_ES, -fv1_ES, fv2_j_ES
@@ -63,7 +96,7 @@ end
 
 function swe_1d_ID_surface(UL, UR, dU, E, nxJ, c, tol, g)::Tuple{Array{Float64,2},Array{Float64,2}}
     # (fxS1,fxS2,fxS3),(fyS1,fyS2,fyS3) = fS2D_LF(UL,UR,g)
-    (fxS1,fxS2) = fS1D(UL,UR,tol,g)
+    (fxS1,fxS2) = fS1D_ID_sur(UL,UR,tol,g)
     (hf, huf) = UL; (hP, huP) = UR; (dh, dhu) = dU;
     fs1 = fxS1.*nxJ; fs2 = fxS2.*nxJ;
     tau = 1
@@ -75,21 +108,24 @@ end
 function swe_1d_ID_vol(UL_E, ops, vgeo, i, j, b_j, tol, g)
     Q_ID, Qb_ID, Q_ES, Qb_ES, E, M_inv, Mf_inv = ops
     rxJ,J = vgeo
+    # h_i, hu_i, b_i = UL_E;
+    # UR_E = (h_i, hu_i, b_j);
     # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
-    (fxV1,fxV2)= fS1D(UL_E,UL_E,tol,g)
+    (fxV1,fxV2)= fS1D_ID_vol(UL_E,UL_E,tol,g)
     h_i, hu_i = UL_E;
 
     QNx_ij = Q_ID[i,j];QNb_ij = Qb_ID[i,j];
 
     fv1_ID = QNx_ij*fxV1;
-    fv2_ID = QNx_ij*fxV2 + g*h_i*QNb_ij*b_j;
+    fv2_ID = QNx_ij*fxV2;
+    # fv2_ID = QNx_ij*fxV2 + g*h_i*QNb_ij*b_j;
     return fv1_ID, fv2_ID
 end
 
 function swe_1d_ID_h(UL_E, Q_ID, i, j, tol, g)
     # (rxJ_i, sxJ_i, ryJ_i, syJ_i) = vgeo_e;
     # (fxV1,fxV2,fxV3),(fyV1,fyV2,fyV3) = fS2D_LF(UL_E,UL_E,g)
-    (fxV1,fxV2) = fS1D(UL_E,UL_E,tol,g)
+    (fxV1,fxV2) = fS1D_ID_vol(UL_E,UL_E,tol,g)
     Q_ID_ij = Q_ID[i,j]
     fv1_ID  = Q_ID_ij*fxV1
     return fv1_ID
@@ -191,4 +227,9 @@ function convex_limiter(rhsh_ES, rhshu_ES, rhsh_ID, rhshu_ID, hh, htmp, tol, dt)
 
     end
     return rhsh, rhshu, L
+end
+
+function hrecon(hL,bL,bR,tol)
+    hLs = max.(0,hL .- tol + bL - max.(bL,bR))
+    return hLs;
 end

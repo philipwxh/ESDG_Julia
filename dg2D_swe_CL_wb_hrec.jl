@@ -17,7 +17,7 @@ include("dg2d_swe_mesh_opt.jl")
 
 g = 1.0
 "Approximation parameters"
-N   = 2 # The order of approximation
+N   = 3 # The order of approximation
 K1D = 1
 CFL = 1/4
 T   = 0.5 # endtimeA
@@ -115,6 +115,8 @@ cij_y =  ryJ[1,1]*Qr_ID + syJ[1,1]*Qs_ID
 
 C = sqrt.(cij_x.*cij_x+cij_y.*cij_y)
 C_x = cij_x./C; C_y = cij_y./C
+c_i = sum(C, dims = 2);
+nn_x = sum(C_x, dims = 2); nn_y = sum(C_y, dims = 2);
 replace!(C_x, NaN=>0); replace!(C_y, NaN=>0);
 "Time integration"
 rk4a,rk4b,rk4c = ck45()
@@ -343,7 +345,8 @@ for i = 1:MAXIT
 
     # Heun's method - this is an example of a 2nd order SSP RK method
     # local rhs_ES1, rhs_ID1 = swe_2d_rhs(u,ops,dis_cst,vgeo,fgeo,nodemaps, dt1)
-    lambda = maximum(sqrt.((hu./h).^2+(hv./h).^2)+sqrt.(g.*h))
+    # lambda = maximum(sqrt.((hu./h).^2+(hv./h).^2)+sqrt.(g.*h))
+    lambda = maximum((hu./h.*nn_x)+(hv./h.*nn_y)+sqrt.(g.*h)*c_i)
     # dt1 = min(T-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
     dt1 = min(min(T,t_plot[pl_idx])-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
     rhs_1 = swe_2d_rhs(u,ops,dis_cst,vgeo,fgeo,nodemaps, dt1, tol, g)
@@ -362,7 +365,8 @@ for i = 1:MAXIT
        # @show L1
        error("htmp_min<0 ", h_min, pos, "iteration ", i )
     end
-    lambda = maximum(sqrt.((hutmp./htmp).^2+(hvtmp./htmp).^2)+sqrt.(g.*htmp))
+    # lambda = maximum(sqrt.((hutmp./htmp).^2+(hvtmp./htmp).^2)+sqrt.(g.*htmp))
+    lambda = maximum((hutmp./htmp.*nn_x)+(hvtmp./htmp.*nn_y)+sqrt.(g.*htmp)*c_i)
     # dt2 = min(T-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
     dt2 = min(min(T,t_plot[pl_idx])-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
     while dt2<dt1
@@ -370,7 +374,8 @@ for i = 1:MAXIT
         htmp  = h  + dt1*rhs_1[1]
         hutmp = hu + dt1*rhs_1[2]
         hvtmp = hv + dt1*rhs_1[3]
-        lambda = maximum(sqrt.((hutmp./htmp).^2+(hvtmp./htmp).^2)+sqrt.(g.*htmp))
+        # lambda = maximum(sqrt.((hutmp./htmp).^2+(hvtmp./htmp).^2)+sqrt.(g.*htmp))
+        lambda = maximum((hutmp./htmp.*nn_x)+(hvtmp./htmp.*nn_y)+sqrt.(g.*htmp)*c_i)
         # dt2 = min(T-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
         dt2 = min(min(T,t_plot[pl_idx])-t, minimum(wq)*J[1]/(ts_ft*lambda), dT);
     end
